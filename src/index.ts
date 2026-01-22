@@ -6,7 +6,7 @@ const TWO_HOURS_MS = 2 * 60 * 60 * 1000
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
 
 // starting direction - 'BTC→EVM' or 'EVM→BTC'
-const STARTING_DIRECTION: string = 'BTC→EVM'
+const STARTING_DIRECTION: string = 'EVM→BTC'
 
 // BTC → EVM Swaps
 const btcToEvmSwaps: SwapParams[] = [
@@ -51,17 +51,29 @@ async function getQuotesAndExecuteSwaps(swaps: SwapParams[]) {
   console.log('='.repeat(50))
 
   for (const swap of swaps) {
+    // ---------------------------------- RIFT --------------------------------------
     try {
-      // Get quote
+      // 0 - get Rift quote
       const quote = await rift.getQuote(swap.inputToken, swap.outputToken, swap.inputAmount)
       console.log(`\n[${rift.name}] Quote: ${swap.inputAmount} ${swap.inputToken} → ${quote.outputAmount} ${swap.outputToken}`)
       console.log(`  Fee: $${quote.feeUsd.toFixed(4)} (${quote.feePercent.toFixed(2)}%)`)
       logQuote(quote)
 
-      // Execute swap
-      const result = await rift.executeSwap(swap)
-      console.log(`  Swap ID: ${result.swapId}`)
-      logSwap(result)
+      // 1 - execute Rift swap
+      // const result = await rift.executeSwap(swap)
+      // console.log(`  Swap ID: ${result.swapId}`)
+      // logSwap(result)
+    } catch (err) {
+      console.error(`  ❌ Error: ${err instanceof Error ? err.message : err}`)
+    }
+
+    // ---------------------------------- THORCHAIN --------------------------------------
+    try {
+      // 0 - get Thorchain quote
+      // const quote = await thorchain.getQuote(swap.inputToken, swap.outputToken, swap.inputAmount)
+      // console.log(`\n[${thorchain.name}] Quote: ${swap.inputAmount} ${swap.inputToken} → ${quote.outputAmount} ${swap.outputToken}`)
+      // console.log(`  Fee: $${quote.feeUsd.toFixed(4)} (${quote.feePercent.toFixed(2)}%)`)
+      // logQuote(quote)
     } catch (err) {
       console.error(`  ❌ Error: ${err instanceof Error ? err.message : err}`)
     }
@@ -86,7 +98,7 @@ async function main() {
   const getNextDirection = () => (getSwaps()[0]?.inputToken === 'BTC' ? 'BTC → EVM' : 'EVM → BTC')
 
   // 2 - run the first set immediately
-  // await getQuotesAndExecuteSwaps(getSwaps())
+  await getQuotesAndExecuteSwaps(getSwaps())
   cycleCount++
 
   // 3 - track next swap time
