@@ -80,9 +80,6 @@ export function startServer() {
       background: var(--bg-primary);
       color: var(--text-primary);
       min-height: 100vh;
-      background-image: 
-        radial-gradient(ellipse at 20% 0%, rgba(0, 229, 255, 0.08) 0%, transparent 50%),
-        radial-gradient(ellipse at 80% 100%, rgba(168, 85, 247, 0.06) 0%, transparent 50%);
     }
 
     .container {
@@ -102,10 +99,7 @@ export function startServer() {
     .header-left h1 {
       font-size: 2rem;
       font-weight: 700;
-      background: var(--gradient-1);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
+      color: var(--accent-orange);
       margin-bottom: 8px;
     }
 
@@ -120,7 +114,7 @@ export function startServer() {
     .live-indicator {
       width: 8px;
       height: 8px;
-      background: var(--accent-green);
+      background: var(--accent-orange);
       border-radius: 50%;
       animation: pulse 2s infinite;
     }
@@ -179,11 +173,14 @@ export function startServer() {
     .stat-card {
       background: var(--bg-card);
       border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 24px;
+      border-radius: 12px;
+      padding: 16px 20px;
       position: relative;
       overflow: hidden;
       transition: all 0.3s ease;
+      display: flex;
+      align-items: center;
+      gap: 16px;
     }
 
     .stat-card:hover {
@@ -196,9 +193,9 @@ export function startServer() {
       position: absolute;
       top: 0;
       left: 0;
-      right: 0;
-      height: 3px;
-      background: var(--gradient-1);
+      bottom: 0;
+      width: 3px;
+      background: var(--accent-orange);
       opacity: 0;
       transition: opacity 0.3s ease;
     }
@@ -208,40 +205,46 @@ export function startServer() {
     }
 
     .stat-icon {
-      width: 40px;
-      height: 40px;
+      width: 44px;
+      height: 44px;
       border-radius: 10px;
       display: flex;
       align-items: center;
       justify-content: center;
       font-size: 1.2rem;
-      margin-bottom: 16px;
+      flex-shrink: 0;
     }
 
-    .stat-icon.cyan { background: rgba(0, 229, 255, 0.1); color: var(--accent-cyan); }
-    .stat-icon.purple { background: rgba(168, 85, 247, 0.1); color: var(--accent-purple); }
-    .stat-icon.green { background: rgba(34, 197, 94, 0.1); color: var(--accent-green); }
     .stat-icon.orange { background: rgba(245, 158, 11, 0.1); color: var(--accent-orange); }
+    .stat-icon.green { background: rgba(34, 197, 94, 0.1); color: var(--accent-green); }
+    .stat-icon.blue { background: rgba(59, 130, 246, 0.15); color: var(--accent-blue); }
+    .stat-icon.gray { background: rgba(136, 136, 160, 0.1); color: var(--text-secondary); }
+
+    .stat-content {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
 
     .stat-label {
       color: var(--text-muted);
-      font-size: 0.75rem;
+      font-size: 0.7rem;
       font-weight: 500;
       text-transform: uppercase;
       letter-spacing: 0.5px;
-      margin-bottom: 8px;
     }
 
     .stat-value {
-      font-size: 2rem;
+      font-size: 1.5rem;
       font-weight: 700;
       color: var(--text-primary);
+      line-height: 1;
     }
 
-    .stat-value.cyan { color: var(--accent-cyan); }
-    .stat-value.purple { color: var(--accent-purple); }
-    .stat-value.green { color: var(--accent-green); }
     .stat-value.orange { color: var(--accent-orange); }
+    .stat-value.green { color: var(--accent-green); }
+    .stat-value.blue { color: var(--accent-blue); }
+    .stat-value.gray { color: var(--text-secondary); }
 
     /* Table Card */
     .table-card {
@@ -319,8 +322,8 @@ export function startServer() {
     }
 
     .badge-swap {
-      background: rgba(0, 229, 255, 0.1);
-      color: var(--accent-cyan);
+      background: rgba(245, 158, 11, 0.1);
+      color: var(--accent-orange);
     }
 
     .badge-settlement {
@@ -333,9 +336,9 @@ export function startServer() {
       align-items: center;
       gap: 6px;
       padding: 4px 10px;
-      background: rgba(168, 85, 247, 0.1);
+      background: rgba(245, 158, 11, 0.1);
       border-radius: 6px;
-      color: var(--accent-purple);
+      color: var(--accent-orange);
       font-size: 0.8rem;
       font-weight: 500;
     }
@@ -502,18 +505,18 @@ export function startServer() {
       font-family: 'Fira Code', monospace;
     }
 
-    .modal-value.highlight { color: var(--accent-cyan); }
+    .modal-value.highlight { color: var(--accent-orange); }
     .modal-value.success { color: var(--accent-green); }
     .modal-value.warning { color: var(--accent-orange); }
 
     .modal-value a {
-      color: var(--accent-purple);
+      color: var(--accent-orange);
       text-decoration: none;
       transition: color 0.2s ease;
     }
 
     .modal-value a:hover {
-      color: var(--accent-cyan);
+      color: var(--accent-orange);
       text-decoration: underline;
     }
 
@@ -548,24 +551,32 @@ export function startServer() {
 
     <div class="stats-grid">
       <div class="stat-card">
-        <div class="stat-icon cyan">📊</div>
-        <div class="stat-label">Total Quotes</div>
-        <div class="stat-value cyan" id="quoteCount">0</div>
+        <div class="stat-icon gray">📊</div>
+        <div class="stat-content">
+          <div class="stat-label">Quotes</div>
+          <div class="stat-value gray" id="quoteCount">0</div>
+        </div>
       </div>
       <div class="stat-card">
-        <div class="stat-icon purple">🔄</div>
-        <div class="stat-label">Total Swaps</div>
-        <div class="stat-value purple" id="swapCount">0</div>
+        <div class="stat-icon blue">🔄</div>
+        <div class="stat-content">
+          <div class="stat-label">Swaps</div>
+          <div class="stat-value blue" id="swapCount">0</div>
+        </div>
       </div>
       <div class="stat-card">
         <div class="stat-icon green">✓</div>
-        <div class="stat-label">Settlements</div>
-        <div class="stat-value green" id="settlementCount">0</div>
+        <div class="stat-content">
+          <div class="stat-label">Settled</div>
+          <div class="stat-value green" id="settlementCount">0</div>
+        </div>
       </div>
       <div class="stat-card">
         <div class="stat-icon orange">💰</div>
-        <div class="stat-label">Total Fees</div>
-        <div class="stat-value orange" id="totalFees">$0.00</div>
+        <div class="stat-content">
+          <div class="stat-label">Fees</div>
+          <div class="stat-value orange" id="totalFees">$0</div>
+        </div>
       </div>
     </div>
 
