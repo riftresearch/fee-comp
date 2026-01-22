@@ -4,8 +4,9 @@ import {
   mainnetWalletClient,
   getDestinationAddress,
   sendBitcoin,
+  BTC_ADDRESS,
 } from '../account.js'
-import { type Provider, type Quote, type SwapResult, type SwapParams, toSmallestUnit } from './types.js'
+import { type Quote, type SwapResult, type SwapParams, type SettlementResult, toSmallestUnit } from './types.js'
 
 // Currency definitions for Rift (mainnet only)
 const USDC_MAINNET: Currency = {
@@ -50,10 +51,16 @@ function getSdk(): RiftSdk | null {
   })
 }
 
-export const rift: Provider = {
+export interface RiftQuoteResult {
+  quote: Quote
+  execute: () => Promise<SwapResult>
+}
+
+export const rift = {
   name: 'Rift',
 
-  async getQuote(inputToken: string, outputToken: string, inputAmount: string): Promise<Quote> {
+  async getQuote(params: SwapParams): Promise<RiftQuoteResult> {
+    const { inputToken, outputToken, inputAmount } = params
     const fromCurrency = CURRENCIES[inputToken]
     const toCurrency = CURRENCIES[outputToken]
 
@@ -69,15 +76,17 @@ export const rift: Provider = {
     const amount = toSmallestUnit(inputAmount, inputToken)
     const destinationAddress = getDestinationAddress(outputToken)
 
-    const { quote } = await sdk.getQuote({
+    const { quote, executeSwap } = await sdk.getQuote({
       from: fromCurrency,
       to: toCurrency,
       amount,
       mode: 'exact_input',
       destinationAddress,
+      // Refund address for BTC input swaps
+      ...(inputToken === 'BTC' && { refundAddress: BTC_ADDRESS }),
     })
 
-    return {
+    const quoteResult: Quote = {
       provider: 'Rift',
       inputToken,
       outputToken,
@@ -87,45 +96,78 @@ export const rift: Provider = {
       feePercent: (quote.fees.totalUsd / parseFloat(inputAmount)) * 100,
       raw: quote,
     }
-  },
 
-  async executeSwap(params: SwapParams): Promise<SwapResult> {
-    const fromCurrency = CURRENCIES[params.inputToken]
-    const toCurrency = CURRENCIES[params.outputToken]
+    const execute = async (): Promise<SwapResult> => {
+      console.log(`\n🔄 Executing swap...`)
+      const swap = await executeSwap()
+      
+      console.log(`✅ Swap initiated:`)
+      console.log(`   Swap ID: ${swap.swapId}`)
+      console.log(`   Status: ${swap.status}`)
 
-    if (!fromCurrency || !toCurrency) {
-      throw new Error(`Rift: Unknown token`)
+      return {
+        provider: 'Rift',
+        success: true,
+        swapId: swap.swapId,
+        txHash: null,
+        inputToken,
+        outputToken,
+        inputAmount,
+        outputAmount: quote.to.amount,
+        feeUsd: quote.fees.totalUsd,
+        timestamp: Date.now(),
+      }
     }
 
+    return { quote: quoteResult, execute }
+  },
+
+  /**
+   * Single check for settlement status (non-blocking)
+   * Returns SettlementResult if settled/failed, null if still pending
+   */
+  async checkSettlementOnce(swapId: string): Promise<SettlementResult | null> {
     const sdk = getSdk()
     if (!sdk) {
       throw new Error('Rift: SDK not initialized')
     }
 
-    const amount = toSmallestUnit(params.inputAmount, params.inputToken)
-    const destinationAddress = getDestinationAddress(params.outputToken)
+    const status = await sdk.getSwapStatus(swapId)
+    
+    const riftData = (status as { rift?: { status?: string; mm_deposit_status?: unknown; settlement_status?: unknown } }).rift
+    
+    // Check if we have settlement/payout info
+    const mmDeposit = riftData?.mm_deposit_status as { tx_hash?: string; amount?: string } | undefined
+    const settlement = riftData?.settlement_status as { tx_hash?: string; amount?: string } | undefined
 
-    const { quote, executeSwap } = await sdk.getQuote({
-      from: fromCurrency,
-      to: toCurrency,
-      amount,
-      mode: 'exact_input',
-      destinationAddress,
-    })
+    // For EVM -> BTC: mm_deposit_status has BTC payout tx
+    // For BTC -> EVM: settlement_status might have EVM tx
+    const payoutTxHash = mmDeposit?.tx_hash || settlement?.tx_hash || null
+    const actualAmount = mmDeposit?.amount || settlement?.amount || null
 
-    const swap = await executeSwap()
-
-    return {
-      provider: 'Rift',
-      success: true,
-      swapId: swap.swapId,
-      txHash: null,
-      inputToken: params.inputToken,
-      outputToken: params.outputToken,
-      inputAmount: params.inputAmount,
-      outputAmount: quote.to.amount,
-      feeUsd: quote.fees.totalUsd,
-      timestamp: Date.now(),
+    // Check for failure
+    if (riftData?.status === 'failed' || status.status === 'failed') {
+      return {
+        swapId,
+        status: 'failed',
+        payoutTxHash: null,
+        actualOutputAmount: null,
+        settledAt: Date.now(),
+      }
     }
+
+    // Check if settled
+    if (payoutTxHash) {
+      return {
+        swapId,
+        status: riftData?.status || 'completed',
+        payoutTxHash,
+        actualOutputAmount: actualAmount,
+        settledAt: Date.now(),
+      }
+    }
+
+    // Still pending
+    return null
   },
 }

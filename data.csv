@@ -1,0 +1,3 @@
+timestamp,type,provider,inputToken,outputToken,inputAmount,outputAmount,feeUsd,feePercent,swapId,status,payoutTxHash,actualOutputAmount
+2026-01-22T01:25:26.115Z,quote,Rift,CBBTC,BTC,0.0001,9719,0.2529,252944.67,,,,
+2026-01-22T01:25:26.199Z,quote,Rift,BTC,CBBTC,0.0001,9882,0.1062,106218.76,,,,

@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@riftresearch/sdk':
-        specifier: ^0.1.3
-        version: 0.1.3(ajv@8.17.1)(cross-fetch@3.2.0)(ipfs-only-hash@4.0.0)(multiformats@9.9.0)(typescript@5.9.3)(viem@2.44.4(typescript@5.9.3))
+        specifier: ^0.1.4
+        version: 0.1.4(ajv@8.17.1)(cross-fetch@3.2.0)(ipfs-only-hash@4.0.0)(multiformats@9.9.0)(typescript@5.9.3)(viem@2.44.4(typescript@5.9.3))
       dotenv:
         specifier: ^17.2.3
         version: 17.2.3
@@ -293,8 +293,8 @@ packages:
   '@protobufjs/utf8@1.1.0':
     resolution: {integrity: sha512-Vvn3zZrhQZkkBE8LSuW3em98c0FwgO4nxzv6OdSxPKJIEKY2bGbHn+mhGIPerzI4twdxaP8/0+06HBpwf345Lw==}
 
-  '@riftresearch/sdk@0.1.3':
-    resolution: {integrity: sha512-pcghWNfjhFjcY4ruoDP52qvjG3wf+xdrgB2ir9OD/50cfoOQrhWyyeoBql7O0UBj7FQPWTcn93nUEACJrl5bMA==}
+  '@riftresearch/sdk@0.1.4':
+    resolution: {integrity: sha512-Ucl2OL1xqYTpoKmCGuV7Q+TqmWrqbsL25AbK4Y68RsVca+iCKQy/zz6hnKCeqbmtebnh3XtAzQbTg+WAJfXG5g==}
     peerDependencies:
       typescript: '>=4.5.0'
       viem: ^2.0.0
@@ -1050,7 +1050,7 @@ snapshots:
 
   '@protobufjs/utf8@1.1.0': {}
 
-  '@riftresearch/sdk@0.1.3(ajv@8.17.1)(cross-fetch@3.2.0)(ipfs-only-hash@4.0.0)(multiformats@9.9.0)(typescript@5.9.3)(viem@2.44.4(typescript@5.9.3))':
+  '@riftresearch/sdk@0.1.4(ajv@8.17.1)(cross-fetch@3.2.0)(ipfs-only-hash@4.0.0)(multiformats@9.9.0)(typescript@5.9.3)(viem@2.44.4(typescript@5.9.3))':
     dependencies:
       '@cowprotocol/sdk-config': 0.3.0
       '@cowprotocol/sdk-order-book': 0.5.1

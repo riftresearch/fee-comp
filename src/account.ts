@@ -23,8 +23,9 @@ export function logAccountConfig() {
 }
 
 // mainnet clients
-export const mainnetPublicClient = createPublicClient({ chain: mainnet, transport: http(process.env.MAINNET_RPC_URL) })
-export const mainnetWalletClient = evmAccount ? createWalletClient({ account: evmAccount, chain: mainnet, transport: http(process.env.MAINNET_RPC_URL) }) : undefined
+const rpcUrl = `https://eth-mainnet.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`
+export const mainnetPublicClient = createPublicClient({ chain: mainnet, transport: http(rpcUrl) })
+export const mainnetWalletClient = evmAccount ? createWalletClient({ account: evmAccount, chain: mainnet, transport: http(rpcUrl) }) : undefined
 
 // get destination address based on token
 export function getDestinationAddress(outputToken: string): string {
