@@ -76,15 +76,18 @@ export const rift = {
     const amount = toSmallestUnit(inputAmount, inputToken)
     const destinationAddress = getDestinationAddress(outputToken)
 
-    const { quote, executeSwap } = await sdk.getQuote({
+    const quoteRequest = {
       from: fromCurrency,
       to: toCurrency,
       amount,
-      mode: 'exact_input',
+      mode: 'exact_input' as const,
       destinationAddress,
-      // Refund address for BTC input swaps
       ...(inputToken === 'BTC' && { refundAddress: BTC_ADDRESS }),
-    })
+    }
+    
+    // console.log(`\n📝 Quote request:`, JSON.stringify(quoteRequest, null, 2))
+
+    const { quote, executeSwap } = await sdk.getQuote(quoteRequest)
 
     const quoteResult: Quote = {
       provider: 'Rift',
@@ -96,20 +99,64 @@ export const rift = {
       feePercent: (quote.fees.totalUsd / parseFloat(inputAmount)) * 100,
       raw: quote,
     }
+    // console.log(quoteResult)
 
     const execute = async (): Promise<SwapResult> => {
       console.log(`\n🔄 Executing swap...`)
-      const swap = await executeSwap()
+      console.log(`   Direction: ${inputToken} → ${outputToken}`)
+      console.log(`   Amount: ${inputAmount} ${inputToken}`)
+      console.log(`   Destination: ${destinationAddress}`)
+      
+      let swap
+      try {
+        swap = await executeSwap()
+      } catch (execError) {
+        console.error(`   ❌ executeSwap() threw:`, execError)
+        throw execError
+      }
+      
+      // Decode swap ID: format is "c|<cowOrderId>|<riftId>" or "<cowOrderId>|<riftId>"
+      let cowOrderId = ''
+      let riftId = ''
+      try {
+        const decoded = Buffer.from(swap.swapId, 'base64').toString('utf-8')
+        const parts = decoded.split('|')
+        console.log(`   Decoded parts (${parts.length}):`, parts.map(p => p.slice(0, 20) + '...'))
+        
+        if (parts.length >= 3) {
+          // Format: c|<cowOrderId>|<riftId>
+          cowOrderId = parts[1]
+          riftId = parts[2]
+        } else if (parts.length === 2) {
+          // Format: <cowOrderId>|<riftId>
+          cowOrderId = parts[0]
+          riftId = parts[1]
+        }
+      } catch (e) {
+        console.log(`   Failed to decode swap ID:`, e)
+      }
       
       console.log(`✅ Swap initiated:`)
-      console.log(`   Swap ID: ${swap.swapId}`)
+      console.log(`   Rift ID: ${riftId || swap.swapId.slice(0, 30) + '...'}`)
       console.log(`   Status: ${swap.status}`)
+      if (cowOrderId) {
+        console.log(`   CowSwap: https://explorer.cow.fi/orders/${cowOrderId}`)
+      }
+      
+      // Check for deposit tx hash
+      const swapAny = swap as unknown as Record<string, unknown>
+      const depositTxHash = swapAny.depositTxHash || swapAny.txHash || swapAny.transactionHash || null
+      if (depositTxHash) {
+        console.log(`   Deposit Tx: ${depositTxHash}`)
+      } else {
+        // console.log(`   ⚠️  No deposit transaction hash returned!`)
+      }
 
       return {
         provider: 'Rift',
         success: true,
         swapId: swap.swapId,
-        txHash: null,
+        txHash: depositTxHash as string | null,
         inputToken,
         outputToken,
         inputAmount,
@@ -126,7 +173,7 @@ export const rift = {
    * Single check for settlement status (non-blocking)
    * Returns SettlementResult if settled/failed, null if still pending
    */
-  async checkSettlementOnce(swapId: string): Promise<SettlementResult | null> {
+  async checkSettlementOnce(swapId: string, verbose = true): Promise<SettlementResult | null> {
     const sdk = getSdk()
     if (!sdk) {
       throw new Error('Rift: SDK not initialized')
@@ -134,7 +181,20 @@ export const rift = {
 
     const status = await sdk.getSwapStatus(swapId)
     
-    const riftData = (status as { rift?: { status?: string; mm_deposit_status?: unknown; settlement_status?: unknown } }).rift
+    const riftData = (status as { rift?: { status?: string; mm_deposit_status?: unknown; settlement_status?: unknown; user_deposit_status?: unknown } }).rift
+    const currentStatus = riftData?.status || status.status || 'unknown'
+    
+    // Log current status if verbose
+    if (verbose) {
+      const userDeposit = riftData?.user_deposit_status as { status?: string; tx_hash?: string } | undefined
+      const mmDepositStatus = riftData?.mm_deposit_status as { status?: string } | undefined
+      
+      let statusLine = `   [${swapId.slice(0, 8)}...] Status: ${currentStatus}`
+      if (userDeposit?.status) statusLine += ` | Deposit: ${userDeposit.status}`
+      if (userDeposit?.tx_hash) statusLine += ` (${userDeposit.tx_hash.slice(0, 10)}...)`
+      if (mmDepositStatus?.status) statusLine += ` | MM: ${mmDepositStatus.status}`
+      console.log(statusLine)
+    }
     
     // Check if we have settlement/payout info
     const mmDeposit = riftData?.mm_deposit_status as { tx_hash?: string; amount?: string } | undefined
@@ -146,7 +206,9 @@ export const rift = {
     const actualAmount = mmDeposit?.amount || settlement?.amount || null
 
     // Check for failure
-    if (riftData?.status === 'failed' || status.status === 'failed') {
+    if (riftData?.status === 'failed' || currentStatus === 'failed') {
+      console.log(`\n❌ Swap ${swapId} failed. Full status:`)
+      console.log(JSON.stringify(status, null, 2))
       return {
         swapId,
         status: 'failed',
@@ -160,7 +222,7 @@ export const rift = {
     if (payoutTxHash) {
       return {
         swapId,
-        status: riftData?.status || 'completed',
+        status: currentStatus,
         payoutTxHash,
         actualOutputAmount: actualAmount,
         settledAt: Date.now(),
@@ -169,5 +231,21 @@ export const rift = {
 
     // Still pending
     return null
+  },
+
+  /**
+   * Get current status string for a swap (for display)
+   */
+  async getStatusString(swapId: string): Promise<string> {
+    const sdk = getSdk()
+    if (!sdk) return 'sdk_error'
+
+    try {
+      const status = await sdk.getSwapStatus(swapId)
+      const riftData = (status as { rift?: { status?: string } }).rift
+      return riftData?.status || status.status || 'unknown'
+    } catch {
+      return 'error'
+    }
   },
 }

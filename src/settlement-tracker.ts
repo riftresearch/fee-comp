@@ -49,14 +49,20 @@ export function startSettlementWatcher() {
 async function checkAllPending() {
   if (pendingSwaps.size === 0) return
   
-  console.log(`\n🔍 Checking ${pendingSwaps.size} pending swap(s) for settlement...`)
+  // Clear the countdown line and print header
+  process.stdout.write('\r' + ' '.repeat(50) + '\r')
+  console.log(`\n${'─'.repeat(60)}`)
+  console.log(`🔍 Settlement Check (${pendingSwaps.size} pending)`)
+  console.log('─'.repeat(60))
   
   for (const [swapId, swap] of pendingSwaps) {
     try {
-      // Check for timeout
       const elapsed = Date.now() - swap.timestamp
+      const elapsedMins = Math.round(elapsed / 60000)
+      
+      // Check for timeout
       if (elapsed > MAX_WAIT_MS) {
-        console.log(`\n⏰ Swap ${swapId} timed out after ${Math.round(elapsed / 60000)} minutes`)
+        console.log(`⏰ ${swap.inputToken}→${swap.outputToken} TIMEOUT (${elapsedMins}m)`)
         logSettlement({
           swapId,
           status: 'timeout',
@@ -68,27 +74,25 @@ async function checkAllPending() {
         continue
       }
       
-      const settlement = await rift.checkSettlementOnce(swapId)
+      const settlement = await rift.checkSettlementOnce(swapId, false) // quiet mode
       
       if (settlement && settlement.payoutTxHash) {
-        // Settlement complete!
-        console.log(`\n✅ Settlement complete for ${swapId}`)
-        console.log(`   Payout Tx: ${settlement.payoutTxHash}`)
-        console.log(`   Actual Amount: ${settlement.actualOutputAmount}`)
-        
+        console.log(`✅ ${swap.inputToken}→${swap.outputToken} SETTLED | Tx: ${settlement.payoutTxHash.slice(0, 16)}...`)
         logSettlement(settlement, swap)
         pendingSwaps.delete(swapId)
-        
-        console.log(`   (${pendingSwaps.size} swap(s) still pending)`)
       } else if (settlement && settlement.status === 'failed') {
-        console.log(`\n❌ Swap ${swapId} failed`)
+        console.log(`❌ ${swap.inputToken}→${swap.outputToken} FAILED`)
         logSettlement(settlement, swap)
         pendingSwaps.delete(swapId)
+      } else {
+        // Still pending - show compact status
+        const statusInfo = await rift.getStatusString(swapId)
+        console.log(`⏳ ${swap.inputToken}→${swap.outputToken} (${swap.inputAmount}) | ${elapsedMins}m | ${statusInfo}`)
       }
-      // If null or no payout yet, keep polling
       
     } catch (err) {
-      console.error(`   Error checking ${swapId}: ${err instanceof Error ? err.message : err}`)
+      console.error(`❌ ${swap.inputToken}→${swap.outputToken} Error: ${err instanceof Error ? err.message : err}`)
     }
   }
+  console.log('─'.repeat(60) + '\n')
 }

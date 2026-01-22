@@ -44,229 +44,565 @@ export function startServer() {
     // Serve HTML page
     res.setHeader('Content-Type', 'text/html; charset=utf-8')
     res.end(`<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Fee Comp Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rift Fee Comparison</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
   <style>
+    :root {
+      --bg-primary: #050508;
+      --bg-secondary: #0c0c12;
+      --bg-card: #101018;
+      --bg-card-hover: #14141e;
+      --border: #1a1a28;
+      --border-light: #252538;
+      --text-primary: #f0f0f5;
+      --text-secondary: #8888a0;
+      --text-muted: #555568;
+      --accent-cyan: #00e5ff;
+      --accent-purple: #a855f7;
+      --accent-green: #22c55e;
+      --accent-orange: #f59e0b;
+      --accent-red: #ef4444;
+      --accent-blue: #3b82f6;
+      --gradient-1: linear-gradient(135deg, #00e5ff 0%, #a855f7 100%);
+      --gradient-2: linear-gradient(135deg, #0c0c12 0%, #1a1a28 100%);
+    }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    
     body {
-      font-family: 'JetBrains Mono', 'SF Mono', monospace;
-      background: #0a0a0f;
-      color: #e0e0e0;
-      padding: 24px;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
       min-height: 100vh;
+      background-image: 
+        radial-gradient(ellipse at 20% 0%, rgba(0, 229, 255, 0.08) 0%, transparent 50%),
+        radial-gradient(ellipse at 80% 100%, rgba(168, 85, 247, 0.06) 0%, transparent 50%);
     }
-    h1 {
-      font-size: 1.5rem;
-      margin-bottom: 8px;
-      color: #00d4ff;
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 32px;
     }
-    .meta {
-      color: #666;
-      font-size: 0.85rem;
-      margin-bottom: 24px;
-    }
-    .stats {
+
+    /* Header */
+    .header {
       display: flex;
-      gap: 24px;
-      margin-bottom: 24px;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 40px;
     }
-    .stat {
-      background: #12121a;
-      border: 1px solid #1e1e2e;
+
+    .header-left h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      background: var(--gradient-1);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 8px;
+    }
+
+    .header-left .subtitle {
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .live-indicator {
+      width: 8px;
+      height: 8px;
+      background: var(--accent-green);
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(1.1); }
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 12px;
+    }
+
+    .btn {
+      font-family: inherit;
+      font-size: 0.85rem;
+      font-weight: 500;
+      padding: 10px 20px;
       border-radius: 8px;
-      padding: 16px 24px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      border: 1px solid var(--border);
     }
-    .stat-label { color: #666; font-size: 0.75rem; text-transform: uppercase; }
-    .stat-value { font-size: 1.5rem; color: #00d4ff; margin-top: 4px; }
+
+    .btn-secondary {
+      background: var(--bg-card);
+      color: var(--text-secondary);
+    }
+
+    .btn-secondary:hover {
+      background: var(--bg-card-hover);
+      color: var(--text-primary);
+      border-color: var(--border-light);
+    }
+
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.1);
+      color: var(--accent-red);
+      border-color: rgba(239, 68, 68, 0.2);
+    }
+
+    .btn-danger:hover {
+      background: rgba(239, 68, 68, 0.2);
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+
+    /* Stats Grid */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+      margin-bottom: 32px;
+    }
+
+    .stat-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+      position: relative;
+      overflow: hidden;
+      transition: all 0.3s ease;
+    }
+
+    .stat-card:hover {
+      border-color: var(--border-light);
+      transform: translateY(-2px);
+    }
+
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: var(--gradient-1);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }
+
+    .stat-card:hover::before {
+      opacity: 1;
+    }
+
+    .stat-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.2rem;
+      margin-bottom: 16px;
+    }
+
+    .stat-icon.cyan { background: rgba(0, 229, 255, 0.1); color: var(--accent-cyan); }
+    .stat-icon.purple { background: rgba(168, 85, 247, 0.1); color: var(--accent-purple); }
+    .stat-icon.green { background: rgba(34, 197, 94, 0.1); color: var(--accent-green); }
+    .stat-icon.orange { background: rgba(245, 158, 11, 0.1); color: var(--accent-orange); }
+
+    .stat-label {
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+
+    .stat-value {
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .stat-value.cyan { color: var(--accent-cyan); }
+    .stat-value.purple { color: var(--accent-purple); }
+    .stat-value.green { color: var(--accent-green); }
+    .stat-value.orange { color: var(--accent-orange); }
+
+    /* Table Card */
+    .table-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+
+    .table-header {
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .table-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
     table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 0.85rem;
     }
-    th {
+
+    thead th {
       text-align: left;
-      padding: 12px 16px;
-      background: #12121a;
-      color: #888;
-      font-weight: 500;
-      text-transform: uppercase;
+      padding: 14px 20px;
+      background: var(--bg-secondary);
+      color: var(--text-muted);
       font-size: 0.7rem;
-      letter-spacing: 0.05em;
-      border-bottom: 1px solid #1e1e2e;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--border);
     }
-    td {
-      padding: 12px 16px;
-      border-bottom: 1px solid #1a1a24;
-    }
-    tr:hover { background: #12121a; }
-    .type-quote { color: #888; }
-    .type-swap { color: #00d4ff; }
-    .provider { color: #a78bfa; }
-    .pair { color: #fff; }
-    .amount { color: #4ade80; }
-    .fee { color: #f97316; }
-    .refresh { 
-      position: fixed; 
-      top: 24px; 
-      right: 24px; 
-      background: #1e1e2e;
-      border: 1px solid #2e2e3e;
-      color: #888;
-      padding: 8px 16px;
-      border-radius: 6px;
+
+    tbody tr {
       cursor: pointer;
-      font-family: inherit;
+      transition: all 0.15s ease;
     }
-    .refresh:hover { background: #2e2e3e; color: #fff; }
-    .clear { 
-      position: fixed; 
-      top: 24px; 
-      right: 120px; 
-      background: #2a1515;
-      border: 1px solid #3e2020;
-      color: #f87171;
-      padding: 8px 16px;
+
+    tbody tr:hover {
+      background: var(--bg-card-hover);
+    }
+
+    tbody td {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.9rem;
+    }
+
+    tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    /* Badges */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
       border-radius: 6px;
-      cursor: pointer;
-      font-family: inherit;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
     }
-    .clear:hover { background: #3e2020; }
-    .empty { color: #444; text-align: center; padding: 48px; }
-    tr { cursor: pointer; transition: background 0.15s; }
-    
-    /* Modal styles */
+
+    .badge-quote {
+      background: rgba(136, 136, 160, 0.1);
+      color: var(--text-secondary);
+    }
+
+    .badge-swap {
+      background: rgba(0, 229, 255, 0.1);
+      color: var(--accent-cyan);
+    }
+
+    .badge-settlement {
+      background: rgba(34, 197, 94, 0.1);
+      color: var(--accent-green);
+    }
+
+    .provider-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: rgba(168, 85, 247, 0.1);
+      border-radius: 6px;
+      color: var(--accent-purple);
+      font-size: 0.8rem;
+      font-weight: 500;
+    }
+
+    .pair {
+      font-family: 'Fira Code', monospace;
+      font-weight: 500;
+    }
+
+    .pair-arrow {
+      color: var(--text-muted);
+      margin: 0 6px;
+    }
+
+    .amount {
+      font-family: 'Fira Code', monospace;
+      color: var(--accent-green);
+    }
+
+    .fee {
+      font-family: 'Fira Code', monospace;
+      color: var(--accent-orange);
+    }
+
+    .tx-hash {
+      font-family: 'Fira Code', monospace;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .empty-state {
+      padding: 80px 40px;
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    .empty-state-icon {
+      font-size: 3rem;
+      margin-bottom: 16px;
+      opacity: 0.5;
+    }
+
+    /* Modal */
     .modal-overlay {
       display: none;
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0, 0, 0, 0.8);
-      backdrop-filter: blur(4px);
+      background: rgba(5, 5, 8, 0.9);
+      backdrop-filter: blur(8px);
       z-index: 1000;
       justify-content: center;
       align-items: center;
+      animation: fadeIn 0.2s ease;
     }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
     .modal-overlay.active { display: flex; }
+
     .modal {
-      background: #12121a;
-      border: 1px solid #2e2e3e;
-      border-radius: 12px;
-      padding: 24px;
-      max-width: 600px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
       width: 90%;
-      max-height: 80vh;
-      overflow-y: auto;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+      max-width: 560px;
+      max-height: 85vh;
+      overflow: hidden;
+      animation: slideUp 0.3s ease;
     }
+
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
     .modal-header {
+      padding: 24px;
+      border-bottom: 1px solid var(--border);
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 20px;
-      padding-bottom: 16px;
-      border-bottom: 1px solid #2e2e3e;
+      background: var(--bg-secondary);
     }
+
     .modal-title {
-      font-size: 1.1rem;
-      color: #00d4ff;
+      font-size: 1.2rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 12px;
     }
+
     .modal-close {
-      background: none;
-      border: none;
-      color: #666;
-      font-size: 1.5rem;
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-muted);
       cursor: pointer;
-      padding: 0;
-      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.2rem;
+      transition: all 0.2s ease;
     }
-    .modal-close:hover { color: #fff; }
+
+    .modal-close:hover {
+      background: var(--bg-card-hover);
+      color: var(--text-primary);
+      border-color: var(--border-light);
+    }
+
+    .modal-body {
+      padding: 24px;
+      overflow-y: auto;
+      max-height: calc(85vh - 80px);
+    }
+
+    .modal-section {
+      margin-bottom: 24px;
+    }
+
+    .modal-section:last-child {
+      margin-bottom: 0;
+    }
+
+    .modal-section-title {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
     .modal-row {
       display: flex;
       justify-content: space-between;
-      padding: 10px 0;
-      border-bottom: 1px solid #1a1a24;
+      align-items: flex-start;
+      padding: 12px 0;
     }
-    .modal-row:last-child { border-bottom: none; }
+
+    .modal-row:not(:last-child) {
+      border-bottom: 1px solid rgba(26, 26, 40, 0.5);
+    }
+
     .modal-label {
-      color: #666;
-      font-size: 0.8rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
+      font-size: 0.85rem;
+      color: var(--text-muted);
     }
+
     .modal-value {
-      color: #e0e0e0;
       font-size: 0.9rem;
-      word-break: break-all;
+      color: var(--text-primary);
       text-align: right;
-      max-width: 65%;
+      max-width: 60%;
+      word-break: break-all;
+      font-family: 'Fira Code', monospace;
     }
-    .modal-value.highlight { color: #00d4ff; }
-    .modal-value.success { color: #4ade80; }
-    .modal-value.warning { color: #f97316; }
+
+    .modal-value.highlight { color: var(--accent-cyan); }
+    .modal-value.success { color: var(--accent-green); }
+    .modal-value.warning { color: var(--accent-orange); }
+
     .modal-value a {
-      color: #a78bfa;
+      color: var(--accent-purple);
       text-decoration: none;
+      transition: color 0.2s ease;
     }
-    .modal-value a:hover { text-decoration: underline; }
-    .modal-section {
-      margin-top: 16px;
-      padding-top: 16px;
-      border-top: 1px solid #2e2e3e;
+
+    .modal-value a:hover {
+      color: var(--accent-cyan);
+      text-decoration: underline;
     }
-    .modal-section-title {
-      color: #888;
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      margin-bottom: 12px;
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 768px) {
+      .container { padding: 16px; }
+      .stats-grid { grid-template-columns: 1fr; }
+      .header { flex-direction: column; gap: 16px; }
+      .table-card { overflow-x: auto; }
     }
   </style>
 </head>
 <body>
-  <h1>Fee Comp Dashboard</h1>
-  <div class="meta">Auto-refreshes every 5 seconds</div>
-  
-  <div class="stats">
-    <div class="stat">
-      <div class="stat-label">Total Quotes</div>
-      <div class="stat-value" id="quoteCount">0</div>
+  <div class="container">
+    <div class="header">
+      <div class="header-left">
+        <h1>⚡ Rift Fee Comp</h1>
+        <div class="subtitle">
+          <span class="live-indicator"></span>
+          <span>Live • Auto-refresh every 5s</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-danger" onclick="clearData()">Clear Data</button>
+        <button class="btn btn-secondary" onclick="loadData()">↻ Refresh</button>
+      </div>
     </div>
-    <div class="stat">
-      <div class="stat-label">Total Swaps</div>
-      <div class="stat-value" id="swapCount">0</div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-icon cyan">📊</div>
+        <div class="stat-label">Total Quotes</div>
+        <div class="stat-value cyan" id="quoteCount">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon purple">🔄</div>
+        <div class="stat-label">Total Swaps</div>
+        <div class="stat-value purple" id="swapCount">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon green">✓</div>
+        <div class="stat-label">Settlements</div>
+        <div class="stat-value green" id="settlementCount">0</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon orange">💰</div>
+        <div class="stat-label">Total Fees</div>
+        <div class="stat-value orange" id="totalFees">$0.00</div>
+      </div>
+    </div>
+
+    <div class="table-card">
+      <div class="table-header">
+        <div class="table-title">Recent Activity</div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Type</th>
+            <th>Provider</th>
+            <th>Pair</th>
+            <th>Input</th>
+            <th>Output</th>
+            <th>Fee</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
     </div>
   </div>
-
-  <button class="clear" onclick="clearData()">Clear</button>
-  <button class="refresh" onclick="loadData()">Refresh</button>
 
   <div class="modal-overlay" id="modal" onclick="closeModal(event)">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modal-header">
-        <div class="modal-title" id="modalTitle">Settlement Details</div>
-        <button class="modal-close" onclick="closeModal()">&times;</button>
+        <div class="modal-title" id="modalTitle">
+          <span id="modalIcon">📊</span>
+          <span id="modalTitleText">Details</span>
+        </div>
+        <button class="modal-close" onclick="closeModal()">×</button>
       </div>
-      <div id="modalContent"></div>
+      <div class="modal-body" id="modalContent"></div>
     </div>
   </div>
-
-  <table>
-    <thead>
-      <tr>
-        <th>Time</th>
-        <th>Type</th>
-        <th>Provider</th>
-        <th>Pair</th>
-        <th>Input</th>
-        <th>Expected</th>
-        <th>Actual</th>
-        <th>Fee</th>
-        <th>Payout Tx</th>
-      </tr>
-    </thead>
-    <tbody id="tbody"></tbody>
-  </table>
 
   <script>
     let allData = []
@@ -279,30 +615,44 @@ export function startServer() {
         const tbody = document.getElementById('tbody')
         const quotes = allData.filter(d => d.type === 'quote')
         const swaps = allData.filter(d => d.type === 'swap')
+        const settlements = allData.filter(d => d.type === 'settlement')
+        const totalFees = allData.reduce((sum, d) => sum + parseFloat(d.feeUsd || 0), 0)
         
         document.getElementById('quoteCount').textContent = quotes.length
         document.getElementById('swapCount').textContent = swaps.length
+        document.getElementById('settlementCount').textContent = settlements.length
+        document.getElementById('totalFees').textContent = '$' + totalFees.toFixed(2)
         
         if (allData.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="9" class="empty">No data yet</td></tr>'
+          tbody.innerHTML = \`
+            <tr>
+              <td colspan="8">
+                <div class="empty-state">
+                  <div class="empty-state-icon">📭</div>
+                  <div>No data yet. Start running swaps to see activity here.</div>
+                </div>
+              </td>
+            </tr>
+          \`
           return
         }
         
         tbody.innerHTML = allData.slice().reverse().map((row, idx) => {
           const realIdx = allData.length - 1 - idx
-          const payoutTx = row.payoutTxHash ? row.payoutTxHash.slice(0, 10) + '...' : '-'
-          const actualOut = row.actualOutputAmount || '-'
+          const time = new Date(row.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          const badgeClass = row.type === 'settlement' ? 'badge-settlement' : row.type === 'swap' ? 'badge-swap' : 'badge-quote'
+          const status = row.type === 'settlement' ? (row.status || 'pending') : row.type === 'swap' ? 'pending' : '-'
+          
           return \`
             <tr onclick="showDetails(\${realIdx})">
-              <td>\${new Date(row.timestamp).toLocaleTimeString()}</td>
-              <td class="type-\${row.type}">\${row.type}</td>
-              <td class="provider">\${row.provider}</td>
-              <td class="pair">\${row.inputToken} -> \${row.outputToken}</td>
+              <td style="color: var(--text-muted)">\${time}</td>
+              <td><span class="badge \${badgeClass}">\${row.type}</span></td>
+              <td><span class="provider-badge">⚡ \${row.provider}</span></td>
+              <td class="pair">\${row.inputToken}<span class="pair-arrow">→</span>\${row.outputToken}</td>
               <td class="amount">\${row.inputAmount}</td>
-              <td class="amount">\${row.outputAmount}</td>
-              <td class="amount">\${actualOut}</td>
+              <td class="amount">\${row.outputAmount || '-'}</td>
               <td class="fee">$\${parseFloat(row.feeUsd || 0).toFixed(2)}</td>
-              <td>\${payoutTx}</td>
+              <td><span class="badge \${status === 'completed' ? 'badge-settlement' : 'badge-quote'}">\${status}</span></td>
             </tr>
           \`
         }).join('')
@@ -316,58 +666,83 @@ export function startServer() {
       if (!row) return
       
       const modal = document.getElementById('modal')
-      const title = document.getElementById('modalTitle')
+      const icon = document.getElementById('modalIcon')
+      const titleText = document.getElementById('modalTitleText')
       const content = document.getElementById('modalContent')
       
-      title.textContent = row.type === 'settlement' ? 'Settlement Details' 
-        : row.type === 'swap' ? 'Swap Details' : 'Quote Details'
+      const typeConfig = {
+        settlement: { icon: '✅', title: 'Settlement Details' },
+        swap: { icon: '🔄', title: 'Swap Details' },
+        quote: { icon: '📊', title: 'Quote Details' }
+      }
+      
+      const config = typeConfig[row.type] || typeConfig.quote
+      icon.textContent = config.icon
+      titleText.textContent = config.title
       
       const formatTime = (ts) => new Date(ts).toLocaleString()
       const formatHash = (hash, type) => {
-        if (!hash || hash === '-') return '<span style="color:#444">-</span>'
+        if (!hash || hash === '-') return '<span style="color:var(--text-muted)">—</span>'
         const explorer = type === 'btc' 
           ? 'https://mempool.space/tx/' 
           : 'https://etherscan.io/tx/'
-        return \`<a href="\${explorer}\${hash}" target="_blank">\${hash}</a>\`
+        return \`<a href="\${explorer}\${hash}" target="_blank">\${hash.slice(0, 16)}...</a>\`
       }
       
-      // Determine if this is BTC->EVM or EVM->BTC
       const isBtcInput = row.inputToken === 'BTC'
       const payoutType = isBtcInput ? 'eth' : 'btc'
-      const depositType = isBtcInput ? 'btc' : 'eth'
+      
+      let cowOrderId = ''
+      let riftId = row.swapId || ''
+      try {
+        const decoded = atob(row.swapId || '')
+        const parts = decoded.split('|')
+        if (parts.length >= 3) {
+          cowOrderId = parts[1]
+          riftId = parts[2]
+        } else if (parts.length === 2) {
+          cowOrderId = parts[0]
+          riftId = parts[1]
+        }
+      } catch {}
       
       let html = \`
-        <div class="modal-row">
-          <span class="modal-label">Type</span>
-          <span class="modal-value highlight">\${row.type?.toUpperCase()}</span>
-        </div>
-        <div class="modal-row">
-          <span class="modal-label">Provider</span>
-          <span class="modal-value">\${row.provider}</span>
-        </div>
-        <div class="modal-row">
-          <span class="modal-label">Time</span>
-          <span class="modal-value">\${formatTime(row.timestamp)}</span>
+        <div class="modal-section">
+          <div class="modal-section-title">Overview</div>
+          <div class="modal-row">
+            <span class="modal-label">Type</span>
+            <span class="modal-value highlight">\${row.type?.toUpperCase()}</span>
+          </div>
+          <div class="modal-row">
+            <span class="modal-label">Provider</span>
+            <span class="modal-value">\${row.provider}</span>
+          </div>
+          <div class="modal-row">
+            <span class="modal-label">Time</span>
+            <span class="modal-value">\${formatTime(row.timestamp)}</span>
+          </div>
         </div>
         
         <div class="modal-section">
-          <div class="modal-section-title">Trade Info</div>
+          <div class="modal-section-title">Trade</div>
           <div class="modal-row">
             <span class="modal-label">Direction</span>
             <span class="modal-value">\${row.inputToken} → \${row.outputToken}</span>
           </div>
           <div class="modal-row">
-            <span class="modal-label">Input Amount</span>
+            <span class="modal-label">Input</span>
             <span class="modal-value success">\${row.inputAmount} \${row.inputToken}</span>
           </div>
           <div class="modal-row">
             <span class="modal-label">Expected Output</span>
             <span class="modal-value success">\${row.outputAmount} \${row.outputToken}</span>
           </div>
+          \${row.actualOutputAmount ? \`
           <div class="modal-row">
             <span class="modal-label">Actual Output</span>
-            <span class="modal-value \${row.actualOutputAmount ? 'success' : ''}">\${row.actualOutputAmount || '-'} \${row.actualOutputAmount ? row.outputToken : ''}</span>
+            <span class="modal-value success">\${row.actualOutputAmount} \${row.outputToken}</span>
           </div>
+          \` : ''}
         </div>
         
         <div class="modal-section">
@@ -386,18 +761,24 @@ export function startServer() {
       if (row.type === 'swap' || row.type === 'settlement') {
         html += \`
           <div class="modal-section">
-            <div class="modal-section-title">Transaction Hashes</div>
+            <div class="modal-section-title">Transaction Details</div>
             <div class="modal-row">
-              <span class="modal-label">Swap ID</span>
-              <span class="modal-value">\${row.swapId || '-'}</span>
+              <span class="modal-label">Rift ID</span>
+              <span class="modal-value">\${riftId || '—'}</span>
             </div>
+            \${cowOrderId ? \`
+            <div class="modal-row">
+              <span class="modal-label">CowSwap</span>
+              <span class="modal-value"><a href="https://explorer.cow.fi/orders/\${cowOrderId}" target="_blank">View Order ↗</a></span>
+            </div>
+            \` : ''}
             <div class="modal-row">
               <span class="modal-label">Payout Tx</span>
               <span class="modal-value">\${formatHash(row.payoutTxHash, payoutType)}</span>
             </div>
             <div class="modal-row">
               <span class="modal-label">Status</span>
-              <span class="modal-value \${row.status === 'completed' ? 'success' : ''}">\${row.status || '-'}</span>
+              <span class="modal-value \${row.status === 'completed' ? 'success' : ''}">\${row.status || 'pending'}</span>
             </div>
           </div>
         \`

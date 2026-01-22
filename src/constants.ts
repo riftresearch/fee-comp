@@ -4,7 +4,7 @@ export const TWO_HOURS_MS = 2 * 60 * 60 * 1000
 export const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
 
 // starting direction - 'BTC→EVM' or 'EVM→BTC'
-export const STARTING_DIRECTION: string = 'EVM→BTC'
+export const STARTING_DIRECTION: string = 'BTC→EVM'
 
 // set to true to execute swaps, false for quotes only
 export const EXECUTE_SWAPS = false
@@ -12,7 +12,9 @@ export const EXECUTE_SWAPS = false
 // EVM → BTC Swaps
 export const evmToBtcSwaps: SwapParams[] = [
   // $~10 - TEST SWAPS
-  { inputToken: 'CBBTC', outputToken: 'BTC', inputAmount: '0.0001' },
+  // { inputToken: 'CBBTC', outputToken: 'BTC', inputAmount: '0.0001' },
+  // { inputToken: 'USDC', outputToken: 'BTC', inputAmount: '10' },
+  // { inputToken: 'ETH', outputToken: 'BTC', inputAmount: '0.003' },
 
   // // $~100 - SMALL TIER SWAPS
   // { inputToken: 'CBBTC', outputToken: 'BTC', inputAmount: '0.001' },
@@ -34,6 +36,8 @@ export const evmToBtcSwaps: SwapParams[] = [
 export const btcToEvmSwaps: SwapParams[] = [
   // $~10 - TEST SWAPS
   { inputToken: 'BTC', outputToken: 'CBBTC', inputAmount: '0.0001' },
+  { inputToken: 'BTC', outputToken: 'USDC', inputAmount: '0.0001' },
+  { inputToken: 'BTC', outputToken: 'ETH', inputAmount: '0.0001' },
 
   // // $~100 - SMALL TIER SWAPS
   // { inputToken: 'BTC', outputToken: 'CBBTC', inputAmount: '0.001' },
