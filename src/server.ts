@@ -1,10 +1,11 @@
 import { createServer } from 'http'
 import { readFileSync, existsSync, writeFileSync } from 'fs'
 import { join } from 'path'
+import { getBalances, BTC_ADDRESS, EVM_ADDRESS } from './account.js'
 
 const CSV_HEADER = 'timestamp,type,provider,inputToken,outputToken,inputAmount,outputAmount,feeUsd,feePercent,swapId,status,payoutTxHash,actualOutputAmount'
 
-const PORT = 3456
+const PORT = 3457
 
 function parseCSV(filepath: string): object[] {
   if (!existsSync(filepath)) return []
@@ -38,6 +39,22 @@ export function startServer() {
       res.setHeader('Access-Control-Allow-Origin', '*')
       writeFileSync(csvFile, CSV_HEADER + '\n')
       res.end(JSON.stringify({ success: true }))
+      return
+    }
+
+    if (req.url === '/api/balances') {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8')
+      res.setHeader('Access-Control-Allow-Origin', '*')
+      getBalances()
+        .then(balances => res.end(JSON.stringify(balances)))
+        .catch(() => res.end(JSON.stringify({ btc: '0', eth: '0', usdc: '0', cbbtc: '0' })))
+      return
+    }
+
+    if (req.url === '/api/addresses') {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8')
+      res.setHeader('Access-Control-Allow-Origin', '*')
+      res.end(JSON.stringify({ btc: BTC_ADDRESS, evm: EVM_ADDRESS }))
       return
     }
 
@@ -245,6 +262,12 @@ export function startServer() {
     .stat-value.green { color: var(--accent-green); }
     .stat-value.blue { color: var(--accent-blue); }
     .stat-value.gray { color: var(--text-secondary); }
+
+    .stat-usd {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
 
     /* Table Card */
     .table-card {
@@ -520,6 +543,247 @@ export function startServer() {
       text-decoration: underline;
     }
 
+    /* Address Bar */
+    .address-bar {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+
+    .address-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 14px;
+      flex: 1;
+      min-width: 280px;
+    }
+
+    .address-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    .address-value {
+      font-family: 'Fira Code', monospace;
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .address-copy {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 10px;
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .address-copy:hover {
+      background: var(--bg-card-hover);
+      color: var(--text-primary);
+      border-color: var(--border-light);
+    }
+
+    .address-copy.copied {
+      background: rgba(34, 197, 94, 0.1);
+      border-color: var(--accent-green);
+      color: var(--accent-green);
+    }
+
+    /* Swap Journey Cards */
+    .journeys-section {
+      margin-bottom: 32px;
+    }
+
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .section-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .journeys-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 16px;
+    }
+
+    .journey-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      transition: all 0.2s ease;
+    }
+
+    .journey-card:hover {
+      border-color: var(--border-light);
+    }
+
+    .journey-card.settled {
+      border-left: 3px solid var(--accent-green);
+    }
+
+    .journey-card.pending {
+      border-left: 3px solid var(--accent-orange);
+    }
+
+    .journey-card.stuck {
+      border-left: 3px solid var(--accent-red);
+    }
+
+    .journey-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .journey-pair {
+      font-family: 'Fira Code', monospace;
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .journey-status {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+
+    .journey-status.settled {
+      background: rgba(34, 197, 94, 0.1);
+      color: var(--accent-green);
+    }
+
+    .journey-status.pending {
+      background: rgba(245, 158, 11, 0.1);
+      color: var(--accent-orange);
+    }
+
+    .journey-status.stuck {
+      background: rgba(239, 68, 68, 0.1);
+      color: var(--accent-red);
+    }
+
+    .journey-amount {
+      font-family: 'Fira Code', monospace;
+      font-size: 0.9rem;
+      color: var(--accent-green);
+      margin-bottom: 12px;
+    }
+
+    .journey-timeline {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .journey-step {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.8rem;
+    }
+
+    .step-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.7rem;
+      flex-shrink: 0;
+    }
+
+    .step-icon.quote {
+      background: rgba(136, 136, 160, 0.1);
+      color: var(--text-secondary);
+    }
+
+    .step-icon.swap {
+      background: rgba(245, 158, 11, 0.1);
+      color: var(--accent-orange);
+    }
+
+    .step-icon.settlement {
+      background: rgba(34, 197, 94, 0.1);
+      color: var(--accent-green);
+    }
+
+    .step-icon.missing {
+      background: rgba(85, 85, 104, 0.1);
+      color: var(--text-muted);
+      border: 1px dashed var(--border);
+    }
+
+    .step-content {
+      flex: 1;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .step-label {
+      color: var(--text-secondary);
+    }
+
+    .step-time {
+      color: var(--text-muted);
+      font-size: 0.75rem;
+    }
+
+    .journey-footer {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.75rem;
+    }
+
+    .journey-fee {
+      color: var(--accent-orange);
+      font-family: 'Fira Code', monospace;
+    }
+
+    .journey-provider {
+      color: var(--text-muted);
+    }
+
+    .journey-elapsed {
+      color: var(--text-muted);
+    }
+
     /* Responsive */
     @media (max-width: 1024px) {
       .stats-grid { grid-template-columns: repeat(2, 1fr); }
@@ -530,6 +794,8 @@ export function startServer() {
       .stats-grid { grid-template-columns: 1fr; }
       .header { flex-direction: column; gap: 16px; }
       .table-card { overflow-x: auto; }
+      .address-bar { flex-direction: column; }
+      .address-item { min-width: unset; }
     }
   </style>
 </head>
@@ -546,6 +812,23 @@ export function startServer() {
       <div class="header-actions">
         <button class="btn btn-danger" onclick="clearData()">Clear Data</button>
         <button class="btn btn-secondary" onclick="loadData()">↻ Refresh</button>
+      </div>
+    </div>
+
+    <div class="address-bar">
+      <div class="address-item">
+        <span class="address-label" style="color: #f7931a;">BTC</span>
+        <span class="address-value" id="btcAddress">—</span>
+        <button class="address-copy" onclick="copyAddress('btc')" id="btcCopyBtn">
+          <span>Copy</span>
+        </button>
+      </div>
+      <div class="address-item">
+        <span class="address-label" style="color: #627eea;">EVM</span>
+        <span class="address-value" id="evmAddress">—</span>
+        <button class="address-copy" onclick="copyAddress('evm')" id="evmCopyBtn">
+          <span>Copy</span>
+        </button>
       </div>
     </div>
 
@@ -580,9 +863,54 @@ export function startServer() {
       </div>
     </div>
 
+    <div class="stats-grid" style="margin-bottom: 24px;">
+      <div class="stat-card">
+        <div class="stat-icon" style="background: rgba(247, 147, 26, 0.1); color: #f7931a;">₿</div>
+        <div class="stat-content">
+          <div class="stat-label">BTC</div>
+          <div class="stat-value" style="color: #f7931a;" id="btcBalance">—</div>
+          <div class="stat-usd" id="btcUsd"></div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon" style="background: rgba(98, 126, 234, 0.1); color: #627eea;">Ξ</div>
+        <div class="stat-content">
+          <div class="stat-label">ETH</div>
+          <div class="stat-value" style="color: #627eea;" id="ethBalance">—</div>
+          <div class="stat-usd" id="ethUsd"></div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon" style="background: rgba(38, 161, 123, 0.1); color: #26a17b;">$</div>
+        <div class="stat-content">
+          <div class="stat-label">USDC</div>
+          <div class="stat-value" style="color: #26a17b;" id="usdcBalance">—</div>
+          <div class="stat-usd" id="usdcUsd"></div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon" style="background: rgba(0, 82, 255, 0.1); color: #0052ff;">◈</div>
+        <div class="stat-content">
+          <div class="stat-label">cbBTC</div>
+          <div class="stat-value" style="color: #0052ff;" id="cbbtcBalance">—</div>
+          <div class="stat-usd" id="cbbtcUsd"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="journeys-section">
+      <div class="section-header">
+        <div class="section-title">Swap Journeys</div>
+        <span style="color: var(--text-muted); font-size: 0.8rem;" id="journeyCount">0 swaps</span>
+      </div>
+      <div class="journeys-grid" id="journeysGrid">
+        <div style="color: var(--text-muted); padding: 40px; text-align: center;">Loading...</div>
+      </div>
+    </div>
+
     <div class="table-card">
       <div class="table-header">
-        <div class="table-title">Recent Activity</div>
+        <div class="table-title">All Activity (Raw)</div>
       </div>
       <table>
         <thead>
@@ -617,6 +945,295 @@ export function startServer() {
 
   <script>
     let allData = []
+    let allJourneys = []
+    
+    // Copy text to clipboard with feedback
+    async function copyToClipboard(text, btn) {
+      try {
+        await navigator.clipboard.writeText(text)
+        const originalText = btn.textContent
+        btn.textContent = 'Copied!'
+        btn.style.color = 'var(--accent-green)'
+        setTimeout(() => {
+          btn.textContent = originalText
+          btn.style.color = ''
+        }, 1500)
+      } catch (e) {
+        console.error('Failed to copy:', e)
+      }
+    }
+    
+    // Build swap journeys by grouping quote -> swap -> settlement
+    function buildJourneys(data) {
+      const journeys = new Map() // swapId -> journey object
+      const quotes = data.filter(d => d.type === 'quote')
+      const swaps = data.filter(d => d.type === 'swap')
+      const settlements = data.filter(d => d.type === 'settlement')
+      
+      // First, create journeys from swaps
+      for (const swap of swaps) {
+        if (!swap.swapId) continue
+        
+        // Find matching quote (same tokens, within 30s before the swap)
+        const swapTime = new Date(swap.timestamp).getTime()
+        const matchingQuote = quotes.find(q => 
+          q.inputToken === swap.inputToken && 
+          q.outputToken === swap.outputToken &&
+          Math.abs(new Date(q.timestamp).getTime() - swapTime) < 30000 &&
+          new Date(q.timestamp).getTime() <= swapTime
+        )
+        
+        // Find matching settlement
+        const matchingSettlement = settlements.find(s => s.swapId === swap.swapId)
+        
+        journeys.set(swap.swapId, {
+          swapId: swap.swapId,
+          quote: matchingQuote || null,
+          swap: swap,
+          settlement: matchingSettlement || null,
+          inputToken: swap.inputToken,
+          outputToken: swap.outputToken,
+          inputAmount: swap.inputAmount,
+          outputAmount: swap.outputAmount,
+          provider: swap.provider,
+          feeUsd: swap.feeUsd,
+          startTime: matchingQuote?.timestamp || swap.timestamp,
+        })
+      }
+      
+      // Sort by start time descending (newest first)
+      return Array.from(journeys.values()).sort((a, b) => 
+        new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
+      )
+    }
+    
+    function getJourneyStatus(journey) {
+      if (journey.settlement) {
+        // If we have a settlement record, check if it failed or succeeded
+        if (journey.settlement.status === 'timeout') {
+          return 'timeout'
+        }
+        if (journey.settlement.status === 'failed') {
+          return 'failed'
+        }
+        // If there's a payout tx hash or status is completed, it's settled
+        if (journey.settlement.payoutTxHash || journey.settlement.status === 'completed') {
+          return 'settled'
+        }
+        // Settlement exists but no payout yet - still settled (in progress)
+        return 'settled'
+      }
+      // No settlement record - check if swap is stuck (more than 2 hours without settlement)
+      const swapTime = new Date(journey.swap.timestamp).getTime()
+      const elapsed = Date.now() - swapTime
+      if (elapsed > 2 * 60 * 60 * 1000) return 'stuck'
+      return 'pending'
+    }
+    
+    function formatElapsed(ms) {
+      if (ms < 60000) return Math.floor(ms / 1000) + 's'
+      if (ms < 3600000) return Math.floor(ms / 60000) + 'm'
+      return Math.floor(ms / 3600000) + 'h ' + Math.floor((ms % 3600000) / 60000) + 'm'
+    }
+    
+    function renderJourneyCard(journey, idx) {
+      const status = getJourneyStatus(journey)
+      const statusLabels = {
+        settled: 'Settled',
+        pending: 'Pending', 
+        stuck: 'Stuck',
+        timeout: 'Timeout',
+        failed: 'Failed'
+      }
+      const statusLabel = statusLabels[status] || status
+      const statusClass = ['timeout', 'failed', 'stuck'].includes(status) ? 'stuck' : status
+      const startTime = new Date(journey.startTime)
+      const elapsed = journey.settlement 
+        ? new Date(journey.settlement.timestamp).getTime() - startTime.getTime()
+        : Date.now() - startTime.getTime()
+      
+      const formatTime = (ts) => ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'
+      
+      return \`
+        <div class="journey-card \${statusClass}" onclick="showJourneyDetails(\${idx})" style="cursor: pointer;">
+          <div class="journey-header">
+            <span class="journey-pair">\${journey.inputToken} → \${journey.outputToken}</span>
+            <span class="journey-status \${statusClass}">\${statusLabel}</span>
+          </div>
+          <div class="journey-amount">\${journey.inputAmount} \${journey.inputToken}</div>
+          <div class="journey-timeline">
+            <div class="journey-step">
+              <div class="step-icon \${journey.quote ? 'quote' : 'missing'}">📊</div>
+              <div class="step-content">
+                <span class="step-label">Quote</span>
+                <span class="step-time">\${journey.quote ? formatTime(journey.quote.timestamp) : '—'}</span>
+              </div>
+            </div>
+            <div class="journey-step">
+              <div class="step-icon swap">🔄</div>
+              <div class="step-content">
+                <span class="step-label">Swap</span>
+                <span class="step-time">\${formatTime(journey.swap.timestamp)}</span>
+              </div>
+            </div>
+            <div class="journey-step">
+              <div class="step-icon \${journey.settlement ? 'settlement' : 'missing'}">\${journey.settlement ? '✅' : '⏳'}</div>
+              <div class="step-content">
+                <span class="step-label">Settlement</span>
+                <span class="step-time">\${journey.settlement ? formatTime(journey.settlement.timestamp) : 'waiting...'}</span>
+              </div>
+            </div>
+          </div>
+          <div class="journey-footer">
+            <span class="journey-provider">⚡ \${journey.provider}</span>
+            <span class="journey-fee">$\${parseFloat(journey.feeUsd || 0).toFixed(2)}</span>
+            <span class="journey-elapsed">\${formatElapsed(elapsed)}</span>
+          </div>
+        </div>
+      \`
+    }
+    
+    function showJourneyDetails(idx) {
+      const journey = allJourneys[idx]
+      if (!journey) return
+      
+      const modal = document.getElementById('modal')
+      const icon = document.getElementById('modalIcon')
+      const titleText = document.getElementById('modalTitleText')
+      const content = document.getElementById('modalContent')
+      
+      const status = getJourneyStatus(journey)
+      icon.textContent = status === 'settled' ? '✅' : status === 'stuck' ? '❌' : '🔄'
+      titleText.textContent = 'Swap Journey'
+      
+      const formatTime = (ts) => ts ? new Date(ts).toLocaleString() : '—'
+      const formatShortTime = (ts) => ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'
+      
+      // Decode swap ID to get Rift ID and CowSwap order
+      let riftId = ''
+      let cowswapOrder = ''
+      try {
+        const decoded = atob(journey.swapId || '')
+        const parts = decoded.split('|')
+        if (parts.length >= 3 && parts[0] === 'r') {
+          riftId = parts[1]
+        } else if (parts.length >= 3 && parts[0] === 'c') {
+          cowswapOrder = parts[1]
+          riftId = parts[2]
+        } else if (parts.length === 2) {
+          riftId = parts[1] || parts[0]
+        } else {
+          riftId = decoded
+        }
+      } catch { riftId = journey.swapId?.slice(0, 30) || '' }
+      
+      const isBtcOutput = journey.outputToken === 'BTC'
+      const explorerBase = isBtcOutput ? 'https://mempool.space/tx/' : 'https://etherscan.io/tx/'
+      
+      const copyBtn = (text, label) => text ? \`<button onclick="event.stopPropagation(); copyToClipboard('\${text}', this)" style="background:transparent;border:1px solid var(--border);border-radius:4px;padding:2px 8px;cursor:pointer;color:var(--text-muted);font-size:0.7rem;margin-left:8px;">Copy</button>\` : ''
+      
+      const startTime = new Date(journey.startTime).getTime()
+      const endTime = journey.settlement ? new Date(journey.settlement.timestamp).getTime() : Date.now()
+      const totalElapsed = formatElapsed(endTime - startTime)
+      
+      let html = \`
+        <div class="modal-section">
+          <div class="modal-section-title">Overview</div>
+          <div class="modal-row">
+            <span class="modal-label">Direction</span>
+            <span class="modal-value">\${journey.inputToken} → \${journey.outputToken}</span>
+          </div>
+          <div class="modal-row">
+            <span class="modal-label">Amount</span>
+            <span class="modal-value success">\${journey.inputAmount} \${journey.inputToken}</span>
+          </div>
+          <div class="modal-row">
+            <span class="modal-label">Expected Output</span>
+            <span class="modal-value success">\${journey.outputAmount} \${journey.outputToken}</span>
+          </div>
+          \${journey.settlement?.actualOutputAmount ? \`
+          <div class="modal-row">
+            <span class="modal-label">Actual Output</span>
+            <span class="modal-value success">\${journey.settlement.actualOutputAmount} \${journey.outputToken}</span>
+          </div>
+          \` : ''}
+          <div class="modal-row">
+            <span class="modal-label">Status</span>
+            <span class="modal-value \${status === 'settled' ? 'success' : status === 'stuck' ? '' : 'warning'}" style="\${status === 'stuck' ? 'color:var(--accent-red)' : ''}">\${status.toUpperCase()}</span>
+          </div>
+          <div class="modal-row">
+            <span class="modal-label">Total Time</span>
+            <span class="modal-value">\${totalElapsed}</span>
+          </div>
+          <div class="modal-row">
+            <span class="modal-label">Fee</span>
+            <span class="modal-value warning">$\${parseFloat(journey.feeUsd || 0).toFixed(4)}</span>
+          </div>
+        </div>
+        
+        <div class="modal-section">
+          <div class="modal-section-title">IDs & Transactions</div>
+          <div class="modal-row">
+            <span class="modal-label">Swap ID</span>
+            <span class="modal-value" style="font-size:0.75rem;">\${journey.swapId?.slice(0, 20) || '—'}...\${copyBtn(journey.swapId, 'Swap ID')}</span>
+          </div>
+          \${riftId ? \`
+          <div class="modal-row">
+            <span class="modal-label">Rift ID</span>
+            <span class="modal-value">\${riftId}\${copyBtn(riftId, 'Rift ID')}</span>
+          </div>
+          \` : ''}
+          \${cowswapOrder ? \`
+          <div class="modal-row">
+            <span class="modal-label">CowSwap Order</span>
+            <span class="modal-value" style="font-size:0.75rem;">\${cowswapOrder.slice(0, 16)}...\${copyBtn(cowswapOrder, 'CowSwap')}</span>
+          </div>
+          \` : ''}
+          \${journey.settlement?.payoutTxHash ? \`
+          <div class="modal-row">
+            <span class="modal-label">Payout Tx</span>
+            <span class="modal-value"><a href="\${explorerBase}\${journey.settlement.payoutTxHash}" target="_blank">\${journey.settlement.payoutTxHash.slice(0, 16)}...</a>\${copyBtn(journey.settlement.payoutTxHash, 'Tx')}</span>
+          </div>
+          \` : ''}
+        </div>
+        
+        <div class="modal-section">
+          <div class="modal-section-title">Timeline</div>
+          \${journey.quote ? \`
+          <div class="modal-row">
+            <span class="modal-label">📊 Quote</span>
+            <span class="modal-value">\${formatTime(journey.quote.timestamp)}</span>
+          </div>
+          \` : ''}
+          <div class="modal-row">
+            <span class="modal-label">🔄 Swap Initiated</span>
+            <span class="modal-value">\${formatTime(journey.swap.timestamp)}</span>
+          </div>
+          \${journey.settlement ? \`
+          <div class="modal-row">
+            <span class="modal-label">\${journey.settlement.status === 'completed' ? '✅' : '❌'} Settlement</span>
+            <span class="modal-value">\${formatTime(journey.settlement.timestamp)}</span>
+          </div>
+          \` : \`
+          <div class="modal-row">
+            <span class="modal-label">⏳ Settlement</span>
+            <span class="modal-value" style="color:var(--text-muted)">Waiting...</span>
+          </div>
+          \`}
+        </div>
+        
+        <div class="modal-section">
+          <div class="modal-section-title">Provider</div>
+          <div class="modal-row">
+            <span class="modal-label">Provider</span>
+            <span class="modal-value">⚡ \${journey.provider}</span>
+          </div>
+        </div>
+      \`
+      
+      content.innerHTML = html
+      modal.classList.add('active')
+    }
     
     async function loadData() {
       try {
@@ -624,6 +1241,7 @@ export function startServer() {
         allData = await res.json()
         
         const tbody = document.getElementById('tbody')
+        const journeysGrid = document.getElementById('journeysGrid')
         const quotes = allData.filter(d => d.type === 'quote')
         const swaps = allData.filter(d => d.type === 'swap')
         const settlements = allData.filter(d => d.type === 'settlement')
@@ -634,6 +1252,17 @@ export function startServer() {
         document.getElementById('settlementCount').textContent = settlements.length
         document.getElementById('totalFees').textContent = '$' + totalFees.toFixed(2)
         
+        // Build and render journeys
+        allJourneys = buildJourneys(allData)
+        document.getElementById('journeyCount').textContent = allJourneys.length + ' swap' + (allJourneys.length !== 1 ? 's' : '')
+        
+        if (allJourneys.length === 0) {
+          journeysGrid.innerHTML = '<div style="color: var(--text-muted); padding: 40px; text-align: center; grid-column: 1 / -1;">No swaps yet. Execute some swaps to track them here.</div>'
+        } else {
+          journeysGrid.innerHTML = allJourneys.map((j, i) => renderJourneyCard(j, i)).join('')
+        }
+        
+        // Render raw table
         if (allData.length === 0) {
           tbody.innerHTML = \`
             <tr>
@@ -703,17 +1332,17 @@ export function startServer() {
       const isBtcInput = row.inputToken === 'BTC'
       const payoutType = isBtcInput ? 'eth' : 'btc'
       
-      let cowOrderId = ''
       let riftId = row.swapId || ''
       try {
         const decoded = atob(row.swapId || '')
         const parts = decoded.split('|')
-        if (parts.length >= 3) {
-          cowOrderId = parts[1]
-          riftId = parts[2]
-        } else if (parts.length === 2) {
-          cowOrderId = parts[0]
+        if (parts.length >= 3 && parts[0] === 'r') {
+          // Format: r|<rift-uuid>|c
           riftId = parts[1]
+        } else if (parts.length === 2) {
+          riftId = parts[1] || parts[0]
+        } else {
+          riftId = decoded
         }
       } catch {}
       
@@ -777,12 +1406,6 @@ export function startServer() {
               <span class="modal-label">Rift ID</span>
               <span class="modal-value">\${riftId || '—'}</span>
             </div>
-            \${cowOrderId ? \`
-            <div class="modal-row">
-              <span class="modal-label">CowSwap</span>
-              <span class="modal-value"><a href="https://explorer.cow.fi/orders/\${cowOrderId}" target="_blank">View Order ↗</a></span>
-            </div>
-            \` : ''}
             <div class="modal-row">
               <span class="modal-label">Payout Tx</span>
               <span class="modal-value">\${formatHash(row.payoutTxHash, payoutType)}</span>
@@ -814,8 +1437,71 @@ export function startServer() {
       loadData()
     }
     
+    async function loadBalances(retries = 2) {
+      try {
+        const res = await fetch('/api/balances')
+        const bal = await res.json()
+        document.getElementById('btcBalance').textContent = bal.btc
+        document.getElementById('ethBalance').textContent = bal.eth
+        document.getElementById('usdcBalance').textContent = bal.usdc
+        document.getElementById('cbbtcBalance').textContent = bal.cbbtc
+        
+        const btcUsd = Number(bal.btcUsd)
+        const ethUsd = Number(bal.ethUsd)
+        const usdcUsd = Number(bal.usdcUsd)
+        const cbbtcUsd = Number(bal.cbbtcUsd)
+        
+        document.getElementById('btcUsd').textContent = btcUsd > 0 ? '$' + btcUsd.toLocaleString() : '...'
+        document.getElementById('ethUsd').textContent = ethUsd > 0 ? '$' + ethUsd.toLocaleString() : '...'
+        document.getElementById('usdcUsd').textContent = usdcUsd > 0 ? '$' + usdcUsd.toLocaleString() : '...'
+        document.getElementById('cbbtcUsd').textContent = cbbtcUsd > 0 ? '$' + cbbtcUsd.toLocaleString() : '...'
+        
+        // Retry if USD values are 0 (prices not loaded)
+        if (retries > 0 && btcUsd === 0 && ethUsd === 0) {
+          setTimeout(() => loadBalances(retries - 1), 2000)
+        }
+      } catch (e) {
+        console.error('Failed to load balances:', e)
+        if (retries > 0) setTimeout(() => loadBalances(retries - 1), 2000)
+      }
+    }
+    
+    let addresses = { btc: '', evm: '' }
+    
+    async function loadAddresses() {
+      try {
+        const res = await fetch('/api/addresses')
+        addresses = await res.json()
+        document.getElementById('btcAddress').textContent = addresses.btc || '—'
+        document.getElementById('evmAddress').textContent = addresses.evm || '—'
+      } catch (e) {
+        console.error('Failed to load addresses:', e)
+      }
+    }
+    
+    async function copyAddress(type) {
+      const address = type === 'btc' ? addresses.btc : addresses.evm
+      if (!address) return
+      
+      try {
+        await navigator.clipboard.writeText(address)
+        const btn = document.getElementById(type + 'CopyBtn')
+        btn.classList.add('copied')
+        btn.querySelector('span').textContent = 'Copied!'
+        setTimeout(() => {
+          btn.classList.remove('copied')
+          btn.querySelector('span').textContent = 'Copy'
+        }, 2000)
+      } catch (e) {
+        console.error('Failed to copy:', e)
+      }
+    }
+    
     loadData()
+    loadBalances()
+    loadAddresses()
     setInterval(loadData, 5000)
+    setInterval(loadBalances, 30000) // Refresh balances every 30s
   </script>
 </body>
 </html>`)

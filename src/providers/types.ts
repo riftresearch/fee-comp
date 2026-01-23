@@ -52,3 +52,28 @@ export function toSmallestUnit(amount: string, token: string): string {
   const paddedFrac = frac.padEnd(decimals, '0').slice(0, decimals)
   return BigInt(whole + paddedFrac).toString()
 }
+
+// Terminal color codes for tokens
+const RESET = '\x1b[0m'
+const TOKEN_COLORS: Record<string, string> = {
+  BTC: '\x1b[38;5;208m',   // Orange
+  CBBTC: '\x1b[38;5;33m',  // Blue
+  ETH: '\x1b[38;5;135m',   // Purple
+  EVM: '\x1b[38;5;135m',   // Purple (same as ETH)
+  USDC: '\x1b[38;5;34m',   // Green
+}
+
+/**
+ * Colorize a token name for terminal output
+ */
+export function colorToken(token: string): string {
+  const color = TOKEN_COLORS[token]
+  return color ? `${color}${token}${RESET}` : token
+}
+
+/**
+ * Format a swap pair with colored tokens (e.g., "BTC→ETH")
+ */
+export function colorPair(inputToken: string, outputToken: string): string {
+  return `${colorToken(inputToken)}→${colorToken(outputToken)}`
+}

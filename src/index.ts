@@ -1,6 +1,8 @@
 import { logAccountConfig } from './account.js'
 import { rift } from './providers/rift.js'
-import { type SwapParams } from './providers/types.js'
+// import { thorchain } from './providers/thorchain.js'
+// import { relay } from './providers/relay.js'
+import { type SwapParams, colorToken, colorPair } from './providers/types.js'
 import { logQuote, logSwap } from './csv.js'
 import { startServer } from './server.js'
 import { trackSwap, startSettlementWatcher } from './settlement-tracker.js'
@@ -13,6 +15,15 @@ import {
   btcToEvmSwaps,
 } from './constants.js'
 
+// ============================================================================
+// ACTIVE PROVIDERS
+// ============================================================================
+const PROVIDERS = {
+  rift: true,
+  // thorchain: true,
+  // relay: true,
+}
+
 // Parse CLI args: --execute or --no-execute
 const args = process.argv.slice(2)
 const EXECUTE_SWAPS = args.includes('--execute')
@@ -23,50 +34,82 @@ const EXECUTE_SWAPS = args.includes('--execute')
 
 // main quoting/swapping function
 async function executeSwaps(swaps: SwapParams[]) {
-  const direction = swaps[0]?.inputToken === 'BTC' ? 'BTC -> EVM' : 'EVM -> BTC'
+  const direction = swaps[0]?.inputToken === 'BTC' 
+    ? `${colorToken('BTC')} -> ${colorToken('EVM')}` 
+    : `${colorToken('EVM')} -> ${colorToken('BTC')}`
   console.log(`\n${'='.repeat(50)}`)
   console.log(`${direction} | ${new Date().toISOString()}`)
   console.log('='.repeat(50))
 
   for (const swap of swaps) {
     // ---------------------------------- RIFT --------------------------------------
-    try {
-      const { quote, execute } = await rift.getQuote(swap)
-      console.log(`\n[${rift.name}] Quote: ${swap.inputAmount} ${swap.inputToken} -> ${quote.outputAmount} ${swap.outputToken}`)
-      console.log(`  Fee: $${quote.feeUsd.toFixed(4)} (${quote.feePercent.toFixed(2)}%)`)
-      logQuote(quote)
+    if (PROVIDERS.rift) {
+      try {
+        const { quote, execute } = await rift.getQuote(swap)
+        console.log(`\n[${rift.name}] Quote: ${swap.inputAmount} ${colorToken(swap.inputToken)} -> ${quote.outputAmount} ${colorToken(swap.outputToken)}`)
+        console.log(`  Fee: $${quote.feeUsd.toFixed(4)} (${quote.feePercent.toFixed(2)}%)`)
+        logQuote(quote)
 
-      if (EXECUTE_SWAPS) {
-        const result = await execute()
-        console.log(`  Swap ID: ${result.swapId}`)
-        logSwap(result)
+        if (EXECUTE_SWAPS) {
+          const result = await execute()
+          logSwap(result)
 
-        // Track swap for settlement in background (non-blocking)
-        if (result.swapId) {
-          trackSwap(result)
+          // Track swap for settlement in background (non-blocking)
+          if (result.swapId) {
+            trackSwap(result)
+          }
         }
+      } catch (err) {
+        console.error(`  ❌ Rift Error: ${err instanceof Error ? err.message : err}`)
       }
-    } catch (err) {
-      console.error(`  ❌ Error: ${err instanceof Error ? err.message : err}`)
     }
 
     // ---------------------------------- THORCHAIN --------------------------------------
-    // try {
-    //   const quote = await thorchain.getQuote(swap.inputToken, swap.outputToken, swap.inputAmount)
-    //   console.log(`\n[${thorchain.name}] Quote: ${swap.inputAmount} ${swap.inputToken} -> ${quote.outputAmount} ${swap.outputToken}`)
-    //   console.log(`  Fee: $${quote.feeUsd.toFixed(4)} (${quote.feePercent.toFixed(2)}%)`)
-    //   logQuote(quote)
-    // } catch (err) {
-    //   console.error(`  ❌ Error: ${err instanceof Error ? err.message : err}`)
+    // if (PROVIDERS.thorchain) {
+    //   try {
+    //     const { quote, execute } = await thorchain.getQuote(swap)
+    //     console.log(`\n[${thorchain.name}] Quote: ${swap.inputAmount} ${colorToken(swap.inputToken)} -> ${quote.outputAmount} ${colorToken(swap.outputToken)}`)
+    //     console.log(`  Fee: $${quote.feeUsd.toFixed(4)} (${quote.feePercent.toFixed(2)}%)`)
+    //     logQuote(quote)
+    //
+    //     if (EXECUTE_SWAPS) {
+    //       const result = await execute()
+    //       logSwap(result)
+    //       if (result.swapId) trackSwap(result)
+    //     }
+    //   } catch (err) {
+    //     console.error(`  ❌ Thorchain Error: ${err instanceof Error ? err.message : err}`)
+    //   }
+    // }
+
+    // ---------------------------------- RELAY --------------------------------------
+    // if (PROVIDERS.relay) {
+    //   try {
+    //     const { quote, execute } = await relay.getQuote(swap)
+    //     console.log(`\n[${relay.name}] Quote: ${swap.inputAmount} ${colorToken(swap.inputToken)} -> ${quote.outputAmount} ${colorToken(swap.outputToken)}`)
+    //     console.log(`  Fee: $${quote.feeUsd.toFixed(4)} (${quote.feePercent.toFixed(2)}%)`)
+    //     logQuote(quote)
+    //
+    //     if (EXECUTE_SWAPS) {
+    //       const result = await execute()
+    //       logSwap(result)
+    //       if (result.swapId) trackSwap(result)
+    //     }
+    //   } catch (err) {
+    //     console.error(`  ❌ Relay Error: ${err instanceof Error ? err.message : err}`)
+    //   }
     // }
   }
 }
 
 async function main() {
+  const activeProviders = Object.entries(PROVIDERS).filter(([, v]) => v).map(([k]) => k)
+  
   console.log('🚀 Fee Comp Server starting...')
   console.log(`📅 ${new Date().toISOString()}`)
   console.log(`⏱️  Running for 7 days, swapping every 2 hours`)
   console.log(`💱 Execute swaps: ${EXECUTE_SWAPS ? 'YES' : 'NO (quotes only)'}`)
+  console.log(`🔌 Providers: ${activeProviders.join(', ') || 'none'}`)
   console.log('')
   logAccountConfig()
   startServer()
@@ -83,7 +126,9 @@ async function main() {
   const sets = [btcToEvmSwaps, evmToBtcSwaps]
   if (STARTING_DIRECTION === 'EVM→BTC') sets.reverse()
   const getSwaps = () => sets[cycleCount % 2]
-  const getNextDirection = () => (getSwaps()[0]?.inputToken === 'BTC' ? 'BTC -> EVM' : 'EVM -> BTC')
+  const getNextDirection = () => (getSwaps()[0]?.inputToken === 'BTC' 
+    ? `${colorToken('BTC')} -> ${colorToken('EVM')}` 
+    : `${colorToken('EVM')} -> ${colorToken('BTC')}`)
 
   // run the first set immediately
   await executeSwaps(getSwaps())

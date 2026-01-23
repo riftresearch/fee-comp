@@ -1,6 +1,6 @@
 import { rift } from './providers/rift.js'
 import { logSettlement } from './csv.js'
-import type { SwapResult, SettlementResult } from './providers/types.js'
+import { type SwapResult, type SettlementResult, colorPair } from './providers/types.js'
 
 // Pending swaps waiting for settlement
 const pendingSwaps = new Map<string, SwapResult>()
@@ -9,7 +9,19 @@ const pendingSwaps = new Map<string, SwapResult>()
 const POLL_INTERVAL_MS = 30_000 // 30 seconds
 
 // Max time to wait for settlement before giving up
-const MAX_WAIT_MS = 2 * 60 * 60 * 1000 // 2 hours
+const MAX_WAIT_MS = 24 * 60 * 60 * 1000 // 24 hours
+
+// Provider emoji mapping
+const PROVIDER_EMOJI: Record<string, string> = {
+  Rift: '⚡',
+  Thorchain: '🌀',
+  Relay: '🔗',
+}
+
+function providerTag(provider: string): string {
+  const emoji = PROVIDER_EMOJI[provider] || '📦'
+  return `${emoji}${provider}`
+}
 
 /**
  * Add a swap to the pending queue for settlement tracking
@@ -20,7 +32,7 @@ export function trackSwap(swap: SwapResult) {
     return
   }
   pendingSwaps.set(swap.swapId, swap)
-  console.log(`📋 Tracking swap ${swap.swapId} for settlement (${pendingSwaps.size} pending)`)
+  // console.log(`📋 Tracking swap ${swap.swapId} for settlement (${pendingSwaps.size} pending)`)
 }
 
 /**
@@ -49,20 +61,20 @@ export function startSettlementWatcher() {
 async function checkAllPending() {
   if (pendingSwaps.size === 0) return
   
-  // Clear the countdown line and print header
-  process.stdout.write('\r' + ' '.repeat(50) + '\r')
-  console.log(`\n${'─'.repeat(60)}`)
-  console.log(`🔍 Settlement Check (${pendingSwaps.size} pending)`)
-  console.log('─'.repeat(60))
+  // Collect all status lines first, then print them all at once
+  // This prevents the countdown timer from interleaving with our output
+  const lines: string[] = []
   
   for (const [swapId, swap] of pendingSwaps) {
     try {
       const elapsed = Date.now() - swap.timestamp
       const elapsedMins = Math.round(elapsed / 60000)
       
+      const tag = providerTag(swap.provider)
+      
       // Check for timeout
       if (elapsed > MAX_WAIT_MS) {
-        console.log(`⏰ ${swap.inputToken}→${swap.outputToken} TIMEOUT (${elapsedMins}m)`)
+        lines.push(`  ⏰ [${tag}] ${colorPair(swap.inputToken, swap.outputToken)} TIMEOUT (${elapsedMins}m)`)
         logSettlement({
           swapId,
           status: 'timeout',
@@ -77,22 +89,36 @@ async function checkAllPending() {
       const settlement = await rift.checkSettlementOnce(swapId, false) // quiet mode
       
       if (settlement && settlement.payoutTxHash) {
-        console.log(`✅ ${swap.inputToken}→${swap.outputToken} SETTLED | Tx: ${settlement.payoutTxHash.slice(0, 16)}...`)
+        lines.push(`  ✅ [${tag}] ${colorPair(swap.inputToken, swap.outputToken)} SETTLED | Tx: ${settlement.payoutTxHash.slice(0, 16)}...`)
         logSettlement(settlement, swap)
         pendingSwaps.delete(swapId)
       } else if (settlement && settlement.status === 'failed') {
-        console.log(`❌ ${swap.inputToken}→${swap.outputToken} FAILED`)
+        lines.push(`  ❌ [${tag}] ${colorPair(swap.inputToken, swap.outputToken)} FAILED`)
         logSettlement(settlement, swap)
         pendingSwaps.delete(swapId)
       } else {
         // Still pending - show compact status
         const statusInfo = await rift.getStatusString(swapId)
-        console.log(`⏳ ${swap.inputToken}→${swap.outputToken} (${swap.inputAmount}) | ${elapsedMins}m | ${statusInfo}`)
+        lines.push(`  ⏳ [${tag}] ${colorPair(swap.inputToken, swap.outputToken)} (${swap.inputAmount}) | ${elapsedMins}m | ${statusInfo}`)
       }
       
     } catch (err) {
-      console.error(`❌ ${swap.inputToken}→${swap.outputToken} Error: ${err instanceof Error ? err.message : err}`)
+      lines.push(`  ❌ [${providerTag(swap.provider)}] ${colorPair(swap.inputToken, swap.outputToken)} Error: ${err instanceof Error ? err.message : err}`)
     }
   }
-  console.log('─'.repeat(60) + '\n')
+  
+  // Clear the countdown line completely, then print all output at once
+  process.stdout.write('\r' + ' '.repeat(80) + '\r')
+  
+  // Print header + all lines + footer as one block
+  const output = [
+    `\n${'─'.repeat(60)}`,
+    `🔍 Settlement Check (${pendingSwaps.size} pending)`,
+    '─'.repeat(60),
+    ...lines,
+    '─'.repeat(60),
+    '' // Empty line before countdown resumes
+  ].join('\n')
+  
+  console.log(output)
 }

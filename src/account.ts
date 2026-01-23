@@ -49,6 +49,124 @@ export function getDestinationAddress(outputToken: string): string {
   return addr
 }
 
+// Token addresses on mainnet
+const USDC_ADDRESS = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48' as const
+const CBBTC_ADDRESS = '0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf' as const
+
+// ERC20 ABI for balanceOf
+const ERC20_ABI = [
+  {
+    name: 'balanceOf',
+    type: 'function',
+    inputs: [{ name: 'account', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
+  },
+] as const
+
+// Price cache to avoid rate limits
+let priceCache: { btc: number; eth: number; timestamp: number } | null = null
+const PRICE_CACHE_TTL = 60_000 // 1 minute
+
+// Fetch prices from CoinGecko with caching
+async function getPrices(): Promise<{ btc: number; eth: number }> {
+  // Return cached prices if fresh
+  if (priceCache && Date.now() - priceCache.timestamp < PRICE_CACHE_TTL) {
+    return { btc: priceCache.btc, eth: priceCache.eth }
+  }
+  
+  try {
+    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd')
+    if (!res.ok) throw new Error(`CoinGecko error: ${res.status}`)
+    const data = await res.json() as { bitcoin?: { usd: number }; ethereum?: { usd: number } }
+    
+    const btc = data.bitcoin?.usd || priceCache?.btc || 100000 // Fallback to ~$100k
+    const eth = data.ethereum?.usd || priceCache?.eth || 3000   // Fallback to ~$3k
+    
+    priceCache = { btc, eth, timestamp: Date.now() }
+    return { btc, eth }
+  } catch {
+    // Return cached or fallback prices
+    if (priceCache) {
+      return { btc: priceCache.btc, eth: priceCache.eth }
+    }
+    return { btc: 100000, eth: 3000 } // Reasonable fallbacks
+  }
+}
+
+interface BalanceResult {
+  btc: string
+  eth: string
+  usdc: string
+  cbbtc: string
+  btcUsd: string
+  ethUsd: string
+  usdcUsd: string
+  cbbtcUsd: string
+  totalUsd: string
+}
+
+// Fetch all balances
+export async function getBalances(): Promise<BalanceResult> {
+  const [btcBalance, ethBalance, usdcBalance, cbbtcBalance, prices] = await Promise.all([
+    // BTC balance from mempool.space
+    fetch(`https://mempool.space/api/address/${BTC_ADDRESS}`)
+      .then(r => r.json() as Promise<{ chain_stats: { funded_txo_sum: number; spent_txo_sum: number } }>)
+      .then(data => {
+        const sats = data.chain_stats.funded_txo_sum - data.chain_stats.spent_txo_sum
+        return sats / 100_000_000
+      })
+      .catch(() => 0),
+    
+    // ETH balance
+    mainnetPublicClient.getBalance({ address: EVM_ADDRESS as `0x${string}` })
+      .then(bal => Number(bal) / 1e18)
+      .catch(() => 0),
+    
+    // USDC balance (6 decimals)
+    mainnetPublicClient.readContract({
+      address: USDC_ADDRESS,
+      abi: ERC20_ABI,
+      functionName: 'balanceOf',
+      args: [EVM_ADDRESS as `0x${string}`],
+    })
+      .then(bal => Number(bal) / 1e6)
+      .catch(() => 0),
+    
+    // CBBTC balance (8 decimals)
+    mainnetPublicClient.readContract({
+      address: CBBTC_ADDRESS,
+      abi: ERC20_ABI,
+      functionName: 'balanceOf',
+      args: [EVM_ADDRESS as `0x${string}`],
+    })
+      .then(bal => Number(bal) / 1e8)
+      .catch(() => 0),
+    
+    // Prices
+    getPrices(),
+  ])
+
+  // Calculate USD values
+  const btcUsd = btcBalance * prices.btc
+  const ethUsd = ethBalance * prices.eth
+  const usdcUsd = usdcBalance // USDC is 1:1
+  const cbbtcUsd = cbbtcBalance * prices.btc // cbBTC tracks BTC price
+  const totalUsd = btcUsd + ethUsd + usdcUsd + cbbtcUsd
+
+  return {
+    btc: btcBalance.toFixed(8),
+    eth: ethBalance.toFixed(6),
+    usdc: usdcBalance.toFixed(2),
+    cbbtc: cbbtcBalance.toFixed(8),
+    btcUsd: btcUsd.toFixed(2),
+    ethUsd: ethUsd.toFixed(2),
+    usdcUsd: usdcUsd.toFixed(2),
+    cbbtcUsd: cbbtcUsd.toFixed(2),
+    totalUsd: totalUsd.toFixed(2),
+  }
+}
+
 // UTXO type
 interface UTXO {
   txid: string
@@ -56,11 +174,182 @@ interface UTXO {
   value: number
 }
 
+// ============================================================================
+// DYNAMIC FEE RATE ESTIMATION
+// ============================================================================
+
+// Fee rates from mempool.space API
+interface FeeRates {
+  fastestFee: number    // Next block (~10 min)
+  halfHourFee: number   // ~30 min confirmation
+  hourFee: number       // ~60 min confirmation
+  economyFee: number    // Low priority
+  minimumFee: number    // Network minimum
+}
+
+// Fee tier selection
+export type FeeTier = 'economy' | 'normal' | 'priority'
+
+// Fee rate cache
+let feeRateCache: { rates: FeeRates; timestamp: number } | null = null
+const FEE_RATE_CACHE_TTL = 60_000 // 1 minute
+
+// Default fee rates if API fails
+const DEFAULT_FEE_RATES: FeeRates = {
+  fastestFee: 15,
+  halfHourFee: 10,
+  hourFee: 8,
+  economyFee: 5,
+  minimumFee: 2,
+}
+
+// Minimum fee floor to avoid stuck transactions
+const MIN_FEE_RATE = 2
+
+/**
+ * Fetch recommended fee rates from mempool.space with caching
+ */
+async function getRecommendedFees(): Promise<FeeRates> {
+  // Return cached rates if fresh
+  if (feeRateCache && Date.now() - feeRateCache.timestamp < FEE_RATE_CACHE_TTL) {
+    return feeRateCache.rates
+  }
+
+  try {
+    const res = await fetch('https://mempool.space/api/v1/fees/recommended')
+    if (!res.ok) throw new Error(`Mempool fee API error: ${res.status}`)
+    
+    const data = await res.json() as FeeRates
+    
+    // Ensure minimum fee floor
+    const rates: FeeRates = {
+      fastestFee: Math.max(data.fastestFee || DEFAULT_FEE_RATES.fastestFee, MIN_FEE_RATE),
+      halfHourFee: Math.max(data.halfHourFee || DEFAULT_FEE_RATES.halfHourFee, MIN_FEE_RATE),
+      hourFee: Math.max(data.hourFee || DEFAULT_FEE_RATES.hourFee, MIN_FEE_RATE),
+      economyFee: Math.max(data.economyFee || DEFAULT_FEE_RATES.economyFee, MIN_FEE_RATE),
+      minimumFee: Math.max(data.minimumFee || DEFAULT_FEE_RATES.minimumFee, MIN_FEE_RATE),
+    }
+    
+    feeRateCache = { rates, timestamp: Date.now() }
+    return rates
+  } catch (err) {
+    console.warn(`⚠️  Failed to fetch fee rates: ${err instanceof Error ? err.message : err}`)
+    // Return cached or default rates
+    if (feeRateCache) {
+      return feeRateCache.rates
+    }
+    return DEFAULT_FEE_RATES
+  }
+}
+
+/**
+ * Get fee rate for a specific tier
+ */
+function getFeeRateForTier(rates: FeeRates, tier: FeeTier): number {
+  switch (tier) {
+    case 'priority':
+      return rates.fastestFee
+    case 'economy':
+      return rates.economyFee
+    case 'normal':
+    default:
+      return rates.halfHourFee
+  }
+}
+
+// ============================================================================
+// UTXO LOCKING SYSTEM (for concurrent transaction safety)
+// ============================================================================
+
+// Track locally reserved UTXOs (not yet in mempool)
+const reservedUtxos = new Map<string, { expiresAt: number }>()
+
+// Reservation expiry time (60 seconds - covers broadcast delays)
+const UTXO_RESERVATION_TTL = 60_000
+
+/**
+ * Generate a unique key for a UTXO
+ */
+function utxoKey(utxo: UTXO): string {
+  return `${utxo.txid}:${utxo.vout}`
+}
+
+/**
+ * Reserve UTXOs for a transaction being built
+ */
+function reserveUtxos(utxos: UTXO[]): void {
+  const expiresAt = Date.now() + UTXO_RESERVATION_TTL
+  for (const utxo of utxos) {
+    reservedUtxos.set(utxoKey(utxo), { expiresAt })
+  }
+}
+
+/**
+ * Release reserved UTXOs (after broadcast or failure)
+ */
+function releaseUtxos(utxos: UTXO[]): void {
+  for (const utxo of utxos) {
+    reservedUtxos.delete(utxoKey(utxo))
+  }
+}
+
+/**
+ * Check if a UTXO is currently reserved locally
+ */
+function isUtxoReserved(utxo: UTXO): boolean {
+  const key = utxoKey(utxo)
+  const reservation = reservedUtxos.get(key)
+  
+  if (!reservation) return false
+  
+  // Check if reservation has expired
+  if (Date.now() > reservation.expiresAt) {
+    reservedUtxos.delete(key)
+    return false
+  }
+  
+  return true
+}
+
+/**
+ * Clean up expired UTXO reservations
+ */
+function cleanupExpiredReservations(): void {
+  const now = Date.now()
+  for (const [key, reservation] of reservedUtxos) {
+    if (now > reservation.expiresAt) {
+      reservedUtxos.delete(key)
+    }
+  }
+}
+
+// ============================================================================
+// UTXO FETCHING
+// ============================================================================
+
 // Fetch UTXOs from mempool.space
 async function getUtxos(address: string): Promise<UTXO[]> {
   const res = await fetch(`https://mempool.space/api/address/${address}/utxo`)
   if (!res.ok) throw new Error(`Failed to fetch UTXOs: ${res.statusText}`)
   return res.json() as Promise<UTXO[]>
+}
+
+// Fetch pending transactions to find UTXOs being spent
+async function getPendingSpends(address: string): Promise<Set<string>> {
+  const spentUtxos = new Set<string>()
+  try {
+    const res = await fetch(`https://mempool.space/api/address/${address}/txs/mempool`)
+    if (!res.ok) return spentUtxos
+    const txs = await res.json() as { vin: { txid: string; vout: number }[] }[]
+    for (const tx of txs) {
+      for (const input of tx.vin) {
+        spentUtxos.add(`${input.txid}:${input.vout}`)
+      }
+    }
+  } catch {
+    // Ignore errors, just return empty set
+  }
+  return spentUtxos
 }
 
 // Broadcast transaction
@@ -76,13 +365,20 @@ async function broadcastTx(txHex: string): Promise<string> {
   return res.text() // Returns txid
 }
 
-// Send Bitcoin
-export async function sendBitcoin(recipient: string, amountSats: bigint): Promise<string> {
+// Send Bitcoin with dynamic fee estimation and UTXO locking
+export async function sendBitcoin(
+  recipient: string,
+  amountSats: bigint,
+  feeTier: FeeTier = 'normal'
+): Promise<string> {
   console.log(`📤 BTC send: ${amountSats} sats to ${recipient}`)
 
   if (!btcPrivateKey) {
     throw new Error('BTC_PRIVATE_KEY not set')
   }
+
+  // Clean up expired UTXO reservations
+  cleanupExpiredReservations()
 
   // Parse private key (WIF format)
   const keyPair = ECPair.fromWIF(btcPrivateKey, btcNetwork)
@@ -96,15 +392,44 @@ export async function sendBitcoin(recipient: string, amountSats: bigint): Promis
   if (!sourceAddress) throw new Error('Could not derive source address')
   console.log(`   From: ${sourceAddress}`)
 
-  // Fetch UTXOs
-  const utxos = await getUtxos(sourceAddress)
-  if (utxos.length === 0) {
+  // Fetch UTXOs, pending spends, and recommended fees in parallel
+  const [allUtxos, pendingSpends, feeRates] = await Promise.all([
+    getUtxos(sourceAddress),
+    getPendingSpends(sourceAddress),
+    getRecommendedFees(),
+  ])
+  
+  // Filter out UTXOs that are:
+  // 1. Being spent in pending mempool transactions
+  // 2. Locally reserved by concurrent transactions
+  const availableUtxos = allUtxos.filter(u => 
+    !pendingSpends.has(`${u.txid}:${u.vout}`) && !isUtxoReserved(u)
+  )
+  
+  if (allUtxos.length === 0) {
     throw new Error(`No UTXOs found for ${sourceAddress}`)
   }
-  console.log(`   UTXOs: ${utxos.length} (total: ${utxos.reduce((s, u) => s + u.value, 0)} sats)`)
+  
+  const mempoolPendingCount = allUtxos.filter(u => pendingSpends.has(`${u.txid}:${u.vout}`)).length
+  const localReservedCount = allUtxos.filter(u => isUtxoReserved(u)).length
+  
+  if (availableUtxos.length === 0) {
+    throw new Error(
+      `No available UTXOs. Total: ${allUtxos.length}, ` +
+      `mempool pending: ${mempoolPendingCount}, ` +
+      `locally reserved: ${localReservedCount}. ` +
+      `Wait for confirmation or reservation expiry.`
+    )
+  }
+  
+  const totalAvailable = availableUtxos.reduce((s, u) => s + u.value, 0)
+  console.log(`   UTXOs: ${availableUtxos.length} available (${mempoolPendingCount} mempool pending, ${localReservedCount} locally reserved)`)
+  console.log(`   Total available: ${totalAvailable} sats`)
 
-  // Higher fee rate to ensure RBF replacement works
-  const FEE_RATE = 25 // sat/vbyte (higher to replace stuck txs)
+  // Get dynamic fee rate based on tier
+  const feeRate = getFeeRateForTier(feeRates, feeTier)
+  console.log(`   Fee rates: fastest=${feeRates.fastestFee}, halfHour=${feeRates.halfHourFee}, economy=${feeRates.economyFee}`)
+  console.log(`   Using ${feeTier} tier: ${feeRate} sat/vB`)
   
   // Calculate vsize: ~10.5 overhead + 68 per input + 31 per output (p2wpkh)
   const calcVsize = (inputs: number, outputs: number) => Math.ceil(10.5 + (68 * inputs) + (31 * outputs))
@@ -114,7 +439,7 @@ export async function sendBitcoin(recipient: string, amountSats: bigint): Promis
   let totalInput = 0
   
   // Sort UTXOs by value descending to minimize inputs needed
-  const sortedUtxos = [...utxos].sort((a, b) => b.value - a.value)
+  const sortedUtxos = [...availableUtxos].sort((a, b) => b.value - a.value)
   
   for (const utxo of sortedUtxos) {
     selectedUtxos.push(utxo)
@@ -122,7 +447,7 @@ export async function sendBitcoin(recipient: string, amountSats: bigint): Promis
     
     // Estimate fee with current inputs (2 outputs: recipient + change)
     const estimatedVsize = calcVsize(selectedUtxos.length, 2)
-    const estimatedFee = FEE_RATE * estimatedVsize
+    const estimatedFee = feeRate * estimatedVsize
     const totalNeeded = Number(amountSats) + estimatedFee
     
     if (totalInput >= totalNeeded) break
@@ -130,66 +455,78 @@ export async function sendBitcoin(recipient: string, amountSats: bigint): Promis
   
   // Final fee calculation
   const vsize = calcVsize(selectedUtxos.length, 2)
-  const fee = FEE_RATE * vsize
+  const fee = feeRate * vsize
 
   if (totalInput < Number(amountSats) + fee) {
     throw new Error(`Insufficient funds: have ${totalInput}, need ${Number(amountSats) + fee}`)
   }
   
-  console.log(`   Inputs: ${selectedUtxos.length}, vsize: ~${vsize}, fee rate: ${FEE_RATE} sat/vB`)
+  console.log(`   Inputs: ${selectedUtxos.length}, vsize: ~${vsize}, fee: ${fee} sats (${feeRate} sat/vB)`)
 
-  // Build transaction
-  const psbt = new bitcoin.Psbt({ network: btcNetwork })
+  // Reserve selected UTXOs to prevent concurrent transactions from using them
+  reserveUtxos(selectedUtxos)
 
-  // Add inputs
-  for (const utxo of selectedUtxos) {
-    psbt.addInput({
-      hash: utxo.txid,
-      index: utxo.vout,
-      witnessUtxo: {
-        script: bitcoin.payments.p2wpkh({
-          pubkey: Buffer.from(keyPair.publicKey),
-          network: btcNetwork,
-        }).output!,
-        value: BigInt(utxo.value),
-      },
-    })
-  }
+  try {
+    // Build transaction
+    const psbt = new bitcoin.Psbt({ network: btcNetwork })
 
-  // Add recipient output
-  psbt.addOutput({
-    address: recipient,
-    value: amountSats,
-  })
+    // Add inputs
+    for (const utxo of selectedUtxos) {
+      psbt.addInput({
+        hash: utxo.txid,
+        index: utxo.vout,
+        witnessUtxo: {
+          script: bitcoin.payments.p2wpkh({
+            pubkey: Buffer.from(keyPair.publicKey),
+            network: btcNetwork,
+          }).output!,
+          value: BigInt(utxo.value),
+        },
+      })
+    }
 
-  // Add change output if needed
-  const change = totalInput - Number(amountSats) - fee
-  if (change > 546) { // dust threshold
+    // Add recipient output
     psbt.addOutput({
-      address: sourceAddress,
-      value: BigInt(change),
+      address: recipient,
+      value: amountSats,
     })
+
+    // Add change output if needed
+    const change = totalInput - Number(amountSats) - fee
+    if (change > 546) { // dust threshold
+      psbt.addOutput({
+        address: sourceAddress,
+        value: BigInt(change),
+      })
+    }
+
+    // Sign all inputs
+    for (let i = 0; i < selectedUtxos.length; i++) {
+      psbt.signInput(i, keyPair)
+    }
+
+    // Finalize and extract
+    psbt.finalizeAllInputs()
+    const tx = psbt.extractTransaction()
+    const txHex = tx.toHex()
+    const txid = tx.getId()
+
+    const actualVsize = tx.virtualSize()
+    const actualFeeRate = (fee / actualVsize).toFixed(1)
+    console.log(`   Tx ID: ${txid}`)
+    console.log(`   Fee: ${fee} sats (${actualFeeRate} sat/vB actual, ${actualVsize} vB)`)
+
+    // Broadcast
+    const broadcastedTxid = await broadcastTx(txHex)
+    console.log(`   ✅ Broadcasted: ${broadcastedTxid}`)
+
+    // Keep UTXOs reserved (they're now in mempool, will be filtered by getPendingSpends)
+    // Reservations will auto-expire after TTL as a safety net
+    
+    return broadcastedTxid
+  } catch (err) {
+    // Release UTXOs on failure so they can be used by other transactions
+    releaseUtxos(selectedUtxos)
+    throw err
   }
-
-  // Sign all inputs
-  for (let i = 0; i < selectedUtxos.length; i++) {
-    psbt.signInput(i, keyPair)
-  }
-
-  // Finalize and extract
-  psbt.finalizeAllInputs()
-  const tx = psbt.extractTransaction()
-  const txHex = tx.toHex()
-  const txid = tx.getId()
-
-  const actualVsize = tx.virtualSize()
-  const actualFeeRate = (fee / actualVsize).toFixed(1)
-  console.log(`   Tx ID: ${txid}`)
-  console.log(`   Fee: ${fee} sats (${actualFeeRate} sat/vB, ${actualVsize} vB)`)
-
-  // Broadcast
-  const broadcastedTxid = await broadcastTx(txHex)
-  console.log(`   ✅ Broadcasted: ${broadcastedTxid}`)
-
-  return broadcastedTxid
 }

@@ -11,10 +11,12 @@ export const EXECUTE_SWAPS = false
 
 // EVM → BTC Swaps
 export const evmToBtcSwaps: SwapParams[] = [
-  // $~10 - TEST SWAPS
-  // { inputToken: 'CBBTC', outputToken: 'BTC', inputAmount: '0.0001' },
-  // { inputToken: 'USDC', outputToken: 'BTC', inputAmount: '10' },
-  // { inputToken: 'ETH', outputToken: 'BTC', inputAmount: '0.003' },
+  // $~20 - TEST SWAPS
+  { inputToken: 'CBBTC', outputToken: 'BTC', inputAmount: '0.0002' },
+  { inputToken: 'USDC', outputToken: 'BTC', inputAmount: '20' },
+  { inputToken: 'ETH', outputToken: 'BTC', inputAmount: '0.006' },
+  // broken ^ retest
+
 
   // // $~100 - SMALL TIER SWAPS
   // { inputToken: 'CBBTC', outputToken: 'BTC', inputAmount: '0.001' },
@@ -34,10 +36,10 @@ export const evmToBtcSwaps: SwapParams[] = [
 
 // BTC → EVM Swaps
 export const btcToEvmSwaps: SwapParams[] = [
-  // $~10 - TEST SWAPS
-  { inputToken: 'BTC', outputToken: 'CBBTC', inputAmount: '0.0001' },
-  { inputToken: 'BTC', outputToken: 'USDC', inputAmount: '0.0001' },
-  { inputToken: 'BTC', outputToken: 'ETH', inputAmount: '0.0001' },
+  // $~ 20 - TEST SWAPS
+  { inputToken: 'BTC', outputToken: 'CBBTC', inputAmount: '0.0002' },
+  { inputToken: 'BTC', outputToken: 'USDC', inputAmount: '0.0002' },
+  { inputToken: 'BTC', outputToken: 'ETH', inputAmount: '0.0002' },
 
   // // $~100 - SMALL TIER SWAPS
   // { inputToken: 'BTC', outputToken: 'CBBTC', inputAmount: '0.001' },

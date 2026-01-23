@@ -6,7 +6,7 @@ import {
   sendBitcoin,
   BTC_ADDRESS,
 } from '../account.js'
-import { type Quote, type SwapResult, type SwapParams, type SettlementResult, toSmallestUnit } from './types.js'
+import { type Quote, type SwapResult, type SwapParams, type SettlementResult, toSmallestUnit, colorToken, colorPair } from './types.js'
 
 // Currency definitions for Rift (mainnet only)
 const USDC_MAINNET: Currency = {
@@ -103,8 +103,8 @@ export const rift = {
 
     const execute = async (): Promise<SwapResult> => {
       console.log(`\n🔄 Executing swap...`)
-      console.log(`   Direction: ${inputToken} → ${outputToken}`)
-      console.log(`   Amount: ${inputAmount} ${inputToken}`)
+      console.log(`   Direction: ${colorPair(inputToken, outputToken)}`)
+      console.log(`   Amount: ${inputAmount} ${colorToken(inputToken)}`)
       console.log(`   Destination: ${destinationAddress}`)
       
       let swap
@@ -115,33 +115,38 @@ export const rift = {
         throw execError
       }
       
-      // Decode swap ID: format is "c|<cowOrderId>|<riftId>" or "<cowOrderId>|<riftId>"
-      let cowOrderId = ''
+      // Decode swap ID - two formats:
+      // Direct: "r|<rift-uuid>|c" (e.g., CBBTC→BTC)
+      // CowSwap: "c|<cowswap-order>|<rift-uuid>" (e.g., USDC→BTC, ETH→BTC)
       let riftId = ''
+      let cowswapOrder = ''
       try {
         const decoded = Buffer.from(swap.swapId, 'base64').toString('utf-8')
         const parts = decoded.split('|')
-        console.log(`   Decoded parts (${parts.length}):`, parts.map(p => p.slice(0, 20) + '...'))
         
-        if (parts.length >= 3) {
-          // Format: c|<cowOrderId>|<riftId>
-          cowOrderId = parts[1]
+        if (parts.length >= 3 && parts[0] === 'r') {
+          // Format: r|<rift-uuid>|c (direct swap)
+          riftId = parts[1]
+        } else if (parts.length >= 3 && parts[0] === 'c') {
+          // Format: c|<cowswap-order>|<rift-uuid> (CowSwap routed)
+          cowswapOrder = parts[1]
           riftId = parts[2]
         } else if (parts.length === 2) {
-          // Format: <cowOrderId>|<riftId>
-          cowOrderId = parts[0]
-          riftId = parts[1]
+          // Fallback format
+          riftId = parts[1] || parts[0]
+        } else {
+          riftId = decoded
         }
-      } catch (e) {
-        console.log(`   Failed to decode swap ID:`, e)
+      } catch {
+        riftId = swap.swapId.slice(0, 30)
       }
       
       console.log(`✅ Swap initiated:`)
-      console.log(`   Rift ID: ${riftId || swap.swapId.slice(0, 30) + '...'}`)
-      console.log(`   Status: ${swap.status}`)
-      if (cowOrderId) {
-        console.log(`   CowSwap: https://explorer.cow.fi/orders/${cowOrderId}`)
+      console.log(`   Rift ID: ${riftId}`)
+      if (cowswapOrder) {
+        console.log(`   CowSwap: ${cowswapOrder.slice(0, 20)}...`)
       }
+      console.log(`   Status: ${swap.status}`)
       
       // Check for deposit tx hash
       const swapAny = swap as unknown as Record<string, unknown>
