@@ -626,6 +626,31 @@ export function startServer() {
       color: var(--text-primary);
     }
 
+    .journey-filters {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .journey-filters select {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 6px 12px;
+      color: var(--text-primary);
+      font-size: 0.85rem;
+      cursor: pointer;
+      outline: none;
+    }
+
+    .journey-filters select:hover {
+      border-color: var(--text-muted);
+    }
+
+    .journey-filters select:focus {
+      border-color: var(--accent-blue);
+    }
+
     .journeys-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -901,7 +926,17 @@ export function startServer() {
     <div class="journeys-section">
       <div class="section-header">
         <div class="section-title">Swap Journeys</div>
-        <span style="color: var(--text-muted); font-size: 0.8rem;" id="journeyCount">0 swaps</span>
+        <div class="journey-filters">
+          <select id="directionFilter" onchange="applyFilters()">
+            <option value="all">All Directions</option>
+            <option value="btc-evm">BTC → EVM</option>
+            <option value="evm-btc">EVM → BTC</option>
+          </select>
+          <select id="providerFilter" onchange="applyFilters()">
+            <option value="all">All Providers</option>
+          </select>
+          <span style="color: var(--text-muted); font-size: 0.8rem;" id="journeyCount">0 swaps</span>
+        </div>
       </div>
       <div class="journeys-grid" id="journeysGrid">
         <div style="color: var(--text-muted); padding: 40px; text-align: center;">Loading...</div>
@@ -1005,6 +1040,49 @@ export function startServer() {
       return Array.from(journeys.values()).sort((a, b) => 
         new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
       )
+    }
+    
+    function getFilteredJourneys() {
+      const directionFilter = document.getElementById('directionFilter').value
+      const providerFilter = document.getElementById('providerFilter').value
+      
+      return allJourneys.filter(j => {
+        // Direction filter
+        if (directionFilter !== 'all') {
+          const isBtcToEvm = j.inputToken === 'BTC'
+          if (directionFilter === 'btc-evm' && !isBtcToEvm) return false
+          if (directionFilter === 'evm-btc' && isBtcToEvm) return false
+        }
+        
+        // Provider filter
+        if (providerFilter !== 'all' && j.provider !== providerFilter) return false
+        
+        return true
+      })
+    }
+    
+    function applyFilters() {
+      const filtered = getFilteredJourneys()
+      const journeysGrid = document.getElementById('journeysGrid')
+      
+      document.getElementById('journeyCount').textContent = filtered.length + ' swap' + (filtered.length !== 1 ? 's' : '')
+      
+      if (filtered.length === 0) {
+        journeysGrid.innerHTML = '<div style="color: var(--text-muted); padding: 40px; text-align: center; grid-column: 1 / -1;">No swaps match the selected filters.</div>'
+      } else {
+        // Need to map to original indices for detail view
+        journeysGrid.innerHTML = filtered.map(j => {
+          const originalIdx = allJourneys.indexOf(j)
+          return renderJourneyCard(j, originalIdx)
+        }).join('')
+      }
+    }
+    
+    function populateProviderFilter() {
+      const providers = [...new Set(allJourneys.map(j => j.provider))].sort()
+      const select = document.getElementById('providerFilter')
+      select.innerHTML = '<option value="all">All Providers</option>' + 
+        providers.map(p => \`<option value="\${p}">\${p}</option>\`).join('')
     }
     
     function getJourneyStatus(journey) {
@@ -1149,12 +1227,12 @@ export function startServer() {
           </div>
           <div class="modal-row">
             <span class="modal-label">Expected Output</span>
-            <span class="modal-value success">\${journey.outputAmount} \${journey.outputToken}</span>
+            <span class="modal-value success">\${journey.outputAmount} \${journey.outputToken === 'BTC' ? 'sats' : journey.outputToken}</span>
           </div>
           \${journey.settlement?.actualOutputAmount ? \`
           <div class="modal-row">
             <span class="modal-label">Actual Output</span>
-            <span class="modal-value success">\${journey.settlement.actualOutputAmount} \${journey.outputToken}</span>
+            <span class="modal-value success">\${journey.settlement.actualOutputAmount} \${journey.outputToken === 'BTC' ? 'sats' : journey.outputToken}</span>
           </div>
           \` : ''}
           <div class="modal-row">
@@ -1211,7 +1289,7 @@ export function startServer() {
           </div>
           \${journey.settlement ? \`
           <div class="modal-row">
-            <span class="modal-label">\${journey.settlement.status === 'completed' ? '✅' : '❌'} Settlement</span>
+            <span class="modal-label">\${(journey.settlement.payoutTxHash || journey.settlement.status === 'completed' || (journey.settlement.status && journey.settlement.status !== 'timeout' && journey.settlement.status !== 'failed')) ? '✅' : '❌'} Settlement</span>
             <span class="modal-value">\${formatTime(journey.settlement.timestamp)}</span>
           </div>
           \` : \`
@@ -1254,12 +1332,13 @@ export function startServer() {
         
         // Build and render journeys
         allJourneys = buildJourneys(allData)
-        document.getElementById('journeyCount').textContent = allJourneys.length + ' swap' + (allJourneys.length !== 1 ? 's' : '')
+        populateProviderFilter()
         
         if (allJourneys.length === 0) {
+          document.getElementById('journeyCount').textContent = '0 swaps'
           journeysGrid.innerHTML = '<div style="color: var(--text-muted); padding: 40px; text-align: center; grid-column: 1 / -1;">No swaps yet. Execute some swaps to track them here.</div>'
         } else {
-          journeysGrid.innerHTML = allJourneys.map((j, i) => renderJourneyCard(j, i)).join('')
+          applyFilters()
         }
         
         // Render raw table
@@ -1375,12 +1454,12 @@ export function startServer() {
           </div>
           <div class="modal-row">
             <span class="modal-label">Expected Output</span>
-            <span class="modal-value success">\${row.outputAmount} \${row.outputToken}</span>
+            <span class="modal-value success">\${row.outputAmount} \${row.outputToken === 'BTC' ? 'sats' : row.outputToken}</span>
           </div>
           \${row.actualOutputAmount ? \`
           <div class="modal-row">
             <span class="modal-label">Actual Output</span>
-            <span class="modal-value success">\${row.actualOutputAmount} \${row.outputToken}</span>
+            <span class="modal-value success">\${row.actualOutputAmount} \${row.outputToken === 'BTC' ? 'sats' : row.outputToken}</span>
           </div>
           \` : ''}
         </div>
