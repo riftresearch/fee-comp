@@ -3,7 +3,7 @@ import { readFileSync, existsSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { getBalances, BTC_ADDRESS, EVM_ADDRESS } from './account.js'
 
-const CSV_HEADER = 'timestamp,type,provider,inputToken,outputToken,inputAmount,outputAmount,feeUsd,feePercent,swapId,status,payoutTxHash,actualOutputAmount'
+const CSV_HEADER = 'timestamp,type,provider,inputToken,outputToken,inputAmount,outputAmount,swapId,status,payoutTxHash,actualOutputAmount,btcPrice,cbbtcPrice,usdcPrice,ethPrice'
 
 const PORT = 3457
 
@@ -879,13 +879,6 @@ export function startServer() {
           <div class="stat-value green" id="settlementCount">0</div>
         </div>
       </div>
-      <div class="stat-card">
-        <div class="stat-icon orange">💰</div>
-        <div class="stat-content">
-          <div class="stat-label">Fees</div>
-          <div class="stat-value orange" id="totalFees">$0</div>
-        </div>
-      </div>
     </div>
 
     <div class="stats-grid" style="margin-bottom: 24px;">
@@ -956,7 +949,6 @@ export function startServer() {
             <th>Pair</th>
             <th>Input</th>
             <th>Output</th>
-            <th>Fee</th>
             <th>Status</th>
           </tr>
         </thead>
@@ -1031,7 +1023,6 @@ export function startServer() {
           inputAmount: swap.inputAmount,
           outputAmount: swap.outputAmount,
           provider: swap.provider,
-          feeUsd: swap.feeUsd,
           startTime: matchingQuote?.timestamp || swap.timestamp,
         })
       }
@@ -1164,7 +1155,6 @@ export function startServer() {
           </div>
           <div class="journey-footer">
             <span class="journey-provider">⚡ \${journey.provider}</span>
-            <span class="journey-fee">$\${parseFloat(journey.feeUsd || 0).toFixed(2)}</span>
             <span class="journey-elapsed">\${formatElapsed(elapsed)}</span>
           </div>
         </div>
@@ -1187,26 +1177,55 @@ export function startServer() {
       const formatTime = (ts) => ts ? new Date(ts).toLocaleString() : '—'
       const formatShortTime = (ts) => ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'
       
-      // Decode swap ID to get Rift ID and CowSwap order
+      // Helper to get price for a token from a record
+      const getPrice = (record, token) => {
+        if (!record) return null
+        const key = token.toLowerCase() + 'Price'
+        return record[key] ? parseFloat(record[key]) : null
+      }
+      
+      // Format prices for display
+      const formatPrices = (record) => {
+        if (!record) return ''
+        const btc = getPrice(record, 'btc')
+        const eth = getPrice(record, 'eth')
+        if (!btc && !eth) return ''
+        const parts = []
+        if (btc) parts.push(\`BTC: $\${btc.toLocaleString()}\`)
+        if (eth) parts.push(\`ETH: $\${eth.toLocaleString()}\`)
+        return parts.join(' · ')
+      }
+      
+      // Decode swap ID based on provider
       let riftId = ''
       let cowswapOrder = ''
-      try {
-        const decoded = atob(journey.swapId || '')
-        const parts = decoded.split('|')
-        if (parts.length >= 3 && parts[0] === 'r') {
-          riftId = parts[1]
-        } else if (parts.length >= 3 && parts[0] === 'c') {
-          cowswapOrder = parts[1]
-          riftId = parts[2]
-        } else if (parts.length === 2) {
-          riftId = parts[1] || parts[0]
-        } else {
-          riftId = decoded
-        }
-      } catch { riftId = journey.swapId?.slice(0, 30) || '' }
+      let relayTxHash = ''
+      const isRift = journey.provider === 'Rift'
+      const isRelay = journey.provider === 'Relay'
+      
+      if (isRift) {
+        try {
+          const decoded = atob(journey.swapId || '')
+          const parts = decoded.split('|')
+          if (parts.length >= 3 && parts[0] === 'r') {
+            riftId = parts[1]
+          } else if (parts.length >= 3 && parts[0] === 'c') {
+            cowswapOrder = parts[1]
+            riftId = parts[2]
+          } else if (parts.length === 2) {
+            riftId = parts[1] || parts[0]
+          } else {
+            riftId = decoded
+          }
+        } catch { riftId = journey.swapId?.slice(0, 30) || '' }
+      } else if (isRelay) {
+        // Relay swap ID is the deposit tx hash
+        relayTxHash = journey.swapId || ''
+      }
       
       const isBtcOutput = journey.outputToken === 'BTC'
       const explorerBase = isBtcOutput ? 'https://mempool.space/tx/' : 'https://etherscan.io/tx/'
+      const ethExplorer = 'https://etherscan.io/tx/'
       
       const copyBtn = (text, label) => text ? \`<button onclick="event.stopPropagation(); copyToClipboard('\${text}', this)" style="background:transparent;border:1px solid var(--border);border-radius:4px;padding:2px 8px;cursor:pointer;color:var(--text-muted);font-size:0.7rem;margin-left:8px;">Copy</button>\` : ''
       
@@ -1243,14 +1262,11 @@ export function startServer() {
             <span class="modal-label">Total Time</span>
             <span class="modal-value">\${totalElapsed}</span>
           </div>
-          <div class="modal-row">
-            <span class="modal-label">Fee</span>
-            <span class="modal-value warning">$\${parseFloat(journey.feeUsd || 0).toFixed(4)}</span>
-          </div>
         </div>
         
         <div class="modal-section">
           <div class="modal-section-title">IDs & Transactions</div>
+          \${isRift ? \`
           <div class="modal-row">
             <span class="modal-label">Swap ID</span>
             <span class="modal-value" style="font-size:0.75rem;">\${journey.swapId?.slice(0, 20) || '—'}...\${copyBtn(journey.swapId, 'Swap ID')}</span>
@@ -1267,10 +1283,17 @@ export function startServer() {
             <span class="modal-value" style="font-size:0.75rem;">\${cowswapOrder.slice(0, 16)}...\${copyBtn(cowswapOrder, 'CowSwap')}</span>
           </div>
           \` : ''}
+          \` : ''}
+          \${isRelay && relayTxHash ? \`
+          <div class="modal-row">
+            <span class="modal-label">Deposit Tx</span>
+            <span class="modal-value"><a href="\${ethExplorer}\${relayTxHash}" target="_blank">\${relayTxHash.slice(0, 16)}...</a>\${copyBtn(relayTxHash, 'Deposit Tx')}</span>
+          </div>
+          \` : ''}
           \${journey.settlement?.payoutTxHash ? \`
           <div class="modal-row">
-            <span class="modal-label">Payout Tx</span>
-            <span class="modal-value"><a href="\${explorerBase}\${journey.settlement.payoutTxHash}" target="_blank">\${journey.settlement.payoutTxHash.slice(0, 16)}...</a>\${copyBtn(journey.settlement.payoutTxHash, 'Tx')}</span>
+            <span class="modal-label">\${isBtcOutput ? 'BTC Payout Tx' : 'Payout Tx'}</span>
+            <span class="modal-value"><a href="\${explorerBase}\${journey.settlement.payoutTxHash}" target="_blank">\${journey.settlement.payoutTxHash.slice(0, 16)}...</a>\${copyBtn(journey.settlement.payoutTxHash, 'Payout Tx')}</span>
           </div>
           \` : ''}
         </div>
@@ -1282,16 +1305,34 @@ export function startServer() {
             <span class="modal-label">📊 Quote</span>
             <span class="modal-value">\${formatTime(journey.quote.timestamp)}</span>
           </div>
+          \${formatPrices(journey.quote) ? \`
+          <div class="modal-row">
+            <span class="modal-label" style="color:var(--text-muted);font-size:0.75rem;">Prices</span>
+            <span class="modal-value" style="color:var(--text-muted);font-size:0.75rem;">\${formatPrices(journey.quote)}</span>
+          </div>
+          \` : ''}
           \` : ''}
           <div class="modal-row">
             <span class="modal-label">🔄 Swap Initiated</span>
             <span class="modal-value">\${formatTime(journey.swap.timestamp)}</span>
           </div>
+          \${formatPrices(journey.swap) ? \`
+          <div class="modal-row">
+            <span class="modal-label" style="color:var(--text-muted);font-size:0.75rem;">Prices</span>
+            <span class="modal-value" style="color:var(--text-muted);font-size:0.75rem;">\${formatPrices(journey.swap)}</span>
+          </div>
+          \` : ''}
           \${journey.settlement ? \`
           <div class="modal-row">
             <span class="modal-label">\${(journey.settlement.payoutTxHash || journey.settlement.status === 'completed' || (journey.settlement.status && journey.settlement.status !== 'timeout' && journey.settlement.status !== 'failed')) ? '✅' : '❌'} Settlement</span>
             <span class="modal-value">\${formatTime(journey.settlement.timestamp)}</span>
           </div>
+          \${formatPrices(journey.settlement) ? \`
+          <div class="modal-row">
+            <span class="modal-label" style="color:var(--text-muted);font-size:0.75rem;">Prices</span>
+            <span class="modal-value" style="color:var(--text-muted);font-size:0.75rem;">\${formatPrices(journey.settlement)}</span>
+          </div>
+          \` : ''}
           \` : \`
           <div class="modal-row">
             <span class="modal-label">⏳ Settlement</span>
@@ -1323,12 +1364,10 @@ export function startServer() {
         const quotes = allData.filter(d => d.type === 'quote')
         const swaps = allData.filter(d => d.type === 'swap')
         const settlements = allData.filter(d => d.type === 'settlement')
-        const totalFees = allData.reduce((sum, d) => sum + parseFloat(d.feeUsd || 0), 0)
         
         document.getElementById('quoteCount').textContent = quotes.length
         document.getElementById('swapCount').textContent = swaps.length
         document.getElementById('settlementCount').textContent = settlements.length
-        document.getElementById('totalFees').textContent = '$' + totalFees.toFixed(2)
         
         // Build and render journeys
         allJourneys = buildJourneys(allData)
@@ -1370,7 +1409,6 @@ export function startServer() {
               <td class="pair">\${row.inputToken}<span class="pair-arrow">→</span>\${row.outputToken}</td>
               <td class="amount">\${row.inputAmount}</td>
               <td class="amount">\${row.outputAmount || '-'}</td>
-              <td class="fee">$\${parseFloat(row.feeUsd || 0).toFixed(2)}</td>
               <td><span class="badge \${status === 'completed' ? 'badge-settlement' : 'badge-quote'}">\${status}</span></td>
             </tr>
           \`
@@ -1411,19 +1449,26 @@ export function startServer() {
       const isBtcInput = row.inputToken === 'BTC'
       const payoutType = isBtcInput ? 'eth' : 'btc'
       
-      let riftId = row.swapId || ''
-      try {
-        const decoded = atob(row.swapId || '')
-        const parts = decoded.split('|')
-        if (parts.length >= 3 && parts[0] === 'r') {
-          // Format: r|<rift-uuid>|c
-          riftId = parts[1]
-        } else if (parts.length === 2) {
-          riftId = parts[1] || parts[0]
-        } else {
-          riftId = decoded
-        }
-      } catch {}
+      const isRift = row.provider === 'Rift'
+      const isRelay = row.provider === 'Relay'
+      let riftId = ''
+      let relayTxHash = ''
+      
+      if (isRift && row.swapId) {
+        try {
+          const decoded = atob(row.swapId || '')
+          const parts = decoded.split('|')
+          if (parts.length >= 3 && parts[0] === 'r') {
+            riftId = parts[1]
+          } else if (parts.length === 2) {
+            riftId = parts[1] || parts[0]
+          } else {
+            riftId = decoded
+          }
+        } catch { riftId = row.swapId?.slice(0, 30) || '' }
+      } else if (isRelay) {
+        relayTxHash = row.swapId || ''
+      }
       
       let html = \`
         <div class="modal-section">
@@ -1464,29 +1509,26 @@ export function startServer() {
           \` : ''}
         </div>
         
-        <div class="modal-section">
-          <div class="modal-section-title">Fees</div>
-          <div class="modal-row">
-            <span class="modal-label">Fee (USD)</span>
-            <span class="modal-value warning">$\${parseFloat(row.feeUsd || 0).toFixed(4)}</span>
-          </div>
-          <div class="modal-row">
-            <span class="modal-label">Fee %</span>
-            <span class="modal-value warning">\${parseFloat(row.feePercent || 0).toFixed(4)}%</span>
-          </div>
-        </div>
       \`
       
       if (row.type === 'swap' || row.type === 'settlement') {
         html += \`
           <div class="modal-section">
             <div class="modal-section-title">Transaction Details</div>
+            \${isRift && riftId ? \`
             <div class="modal-row">
               <span class="modal-label">Rift ID</span>
-              <span class="modal-value">\${riftId || '—'}</span>
+              <span class="modal-value">\${riftId}</span>
             </div>
+            \` : ''}
+            \${isRelay && relayTxHash ? \`
             <div class="modal-row">
-              <span class="modal-label">Payout Tx</span>
+              <span class="modal-label">Deposit Tx</span>
+              <span class="modal-value">\${formatHash(relayTxHash, 'eth')}</span>
+            </div>
+            \` : ''}
+            <div class="modal-row">
+              <span class="modal-label">\${isBtcInput ? 'Payout Tx' : 'BTC Payout Tx'}</span>
               <span class="modal-value">\${formatHash(row.payoutTxHash, payoutType)}</span>
             </div>
             <div class="modal-row">

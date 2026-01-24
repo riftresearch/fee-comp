@@ -10,12 +10,13 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@relayprotocol/relay-sdk": "^5.0.2",
     "@riftresearch/sdk": "^0.1.4",
     "bitcoinjs-lib": "^7.0.1",
     "dotenv": "^17.2.3",
     "ecpair": "^3.0.0",
     "tiny-secp256k1": "^2.2.4",
-    "viem": "^2.21.0"
+    "viem": "^2.44.4"
   },
   "devDependencies": {
     "@types/node": "^20.11.5",

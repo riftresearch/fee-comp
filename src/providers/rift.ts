@@ -95,8 +95,6 @@ export const rift = {
       outputToken,
       inputAmount,
       outputAmount: quote.to.amount,
-      feeUsd: quote.fees.totalUsd,
-      feePercent: (quote.fees.totalUsd / parseFloat(inputAmount)) * 100,
       raw: quote,
     }
     // console.log(quoteResult)
@@ -166,7 +164,6 @@ export const rift = {
         outputToken,
         inputAmount,
         outputAmount: quote.to.amount,
-        feeUsd: quote.fees.totalUsd,
         timestamp: Date.now(),
       }
     }

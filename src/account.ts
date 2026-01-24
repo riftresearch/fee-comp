@@ -23,13 +23,15 @@ const btcNetwork = bitcoin.networks.bitcoin
 
 // log config on startup
 export function logAccountConfig() {
-  console.log('📍 Account Configuration:')
-  console.log(`   EVM Address: ${EVM_ADDRESS}`)
-  console.log(`   EVM Account: ${evmAccount?.address || 'NOT SET'}`)
-  console.log(`   Wallet Client: ${mainnetWalletClient ? '✓' : '✗'}`)
-  console.log(`   BTC: ${BTC_ADDRESS}`)
-  console.log(`   ETH Key: ${ethPrivateKey ? '✓' : '✗'}`)
-  console.log(`   BTC Key: ${btcPrivateKey ? '✓' : '✗'}`)
+  const green = '\x1b[38;5;120m'
+  const reset = '\x1b[0m'
+  
+  console.log(`${green}📍 Account Configuration:${reset}`)
+  console.log(`${green}   EVM Address: ${EVM_ADDRESS}${reset}`)
+  console.log(`${green}   BTC: ${BTC_ADDRESS}${reset}`)
+  console.log(`${green}   Wallet Client: ${mainnetWalletClient ? '✓' : '✗'}${reset}`)
+  console.log(`${green}   ETH Key: ${ethPrivateKey ? '✓' : '✗'}${reset}`)
+  console.log(`${green}   BTC Key: ${btcPrivateKey ? '✓' : '✗'}${reset}`)
   console.log('')
 }
 
@@ -64,35 +66,8 @@ const ERC20_ABI = [
   },
 ] as const
 
-// Price cache to avoid rate limits
-let priceCache: { btc: number; eth: number; timestamp: number } | null = null
-const PRICE_CACHE_TTL = 60_000 // 1 minute
-
-// Fetch prices from CoinGecko with caching
-async function getPrices(): Promise<{ btc: number; eth: number }> {
-  // Return cached prices if fresh
-  if (priceCache && Date.now() - priceCache.timestamp < PRICE_CACHE_TTL) {
-    return { btc: priceCache.btc, eth: priceCache.eth }
-  }
-  
-  try {
-    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd')
-    if (!res.ok) throw new Error(`CoinGecko error: ${res.status}`)
-    const data = await res.json() as { bitcoin?: { usd: number }; ethereum?: { usd: number } }
-    
-    const btc = data.bitcoin?.usd || priceCache?.btc || 100000 // Fallback to ~$100k
-    const eth = data.ethereum?.usd || priceCache?.eth || 3000   // Fallback to ~$3k
-    
-    priceCache = { btc, eth, timestamp: Date.now() }
-    return { btc, eth }
-  } catch {
-    // Return cached or fallback prices
-    if (priceCache) {
-      return { btc: priceCache.btc, eth: priceCache.eth }
-    }
-    return { btc: 100000, eth: 3000 } // Reasonable fallbacks
-  }
-}
+// Use shared price fetcher
+import { getTokenPrices } from './prices.js'
 
 interface BalanceResult {
   btc: string
@@ -143,8 +118,8 @@ export async function getBalances(): Promise<BalanceResult> {
       .then(bal => Number(bal) / 1e8)
       .catch(() => 0),
     
-    // Prices
-    getPrices(),
+    // Prices from shared helper
+    getTokenPrices(),
   ])
 
   // Calculate USD values

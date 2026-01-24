@@ -6,8 +6,6 @@ export interface Quote {
   outputToken: string
   inputAmount: string
   outputAmount: string
-  feeUsd: number
-  feePercent: number
   raw?: unknown
 }
 
@@ -20,7 +18,6 @@ export interface SwapResult {
   outputToken: string
   inputAmount: string
   outputAmount: string  // expected
-  feeUsd: number
   timestamp: number
 }
 

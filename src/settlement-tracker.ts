@@ -1,6 +1,17 @@
 import { rift } from './providers/rift.js'
+import { relay } from './providers/relay.js'
 import { logSettlement } from './csv.js'
 import { type SwapResult, type SettlementResult, colorPair } from './providers/types.js'
+import { getTokenPrices } from './prices.js'
+
+// Provider-specific settlement checkers
+const providerCheckers: Record<string, {
+  checkSettlementOnce: (swapId: string, verbose: boolean) => Promise<SettlementResult | null>
+  getStatusString: (swapId: string) => Promise<string>
+}> = {
+  Rift: rift,
+  Relay: relay,
+}
 
 // Pending swaps waiting for settlement
 const pendingSwaps = new Map<string, SwapResult>()
@@ -61,6 +72,9 @@ export function startSettlementWatcher() {
 async function checkAllPending() {
   if (pendingSwaps.size === 0) return
   
+  // Fetch current token prices for settlement logging
+  const prices = await getTokenPrices()
+  
   // Collect all status lines first, then print them all at once
   // This prevents the countdown timer from interleaving with our output
   const lines: string[] = []
@@ -81,24 +95,31 @@ async function checkAllPending() {
           payoutTxHash: null,
           actualOutputAmount: null,
           settledAt: Date.now(),
-        }, swap)
+        }, swap, prices)
         pendingSwaps.delete(swapId)
         continue
       }
       
-      const settlement = await rift.checkSettlementOnce(swapId, false) // quiet mode
+      // Get the provider-specific checker
+      const checker = providerCheckers[swap.provider]
+      if (!checker) {
+        lines.push(`  ⚠️ [${tag}] ${colorPair(swap.inputToken, swap.outputToken)} No settlement checker for provider`)
+        continue
+      }
+      
+      const settlement = await checker.checkSettlementOnce(swapId, false) // quiet mode
       
       if (settlement && settlement.payoutTxHash) {
         lines.push(`  ✅ [${tag}] ${colorPair(swap.inputToken, swap.outputToken)} SETTLED | Tx: ${settlement.payoutTxHash.slice(0, 16)}...`)
-        logSettlement(settlement, swap)
+        logSettlement(settlement, swap, prices)
         pendingSwaps.delete(swapId)
       } else if (settlement && settlement.status === 'failed') {
         lines.push(`  ❌ [${tag}] ${colorPair(swap.inputToken, swap.outputToken)} FAILED`)
-        logSettlement(settlement, swap)
+        logSettlement(settlement, swap, prices)
         pendingSwaps.delete(swapId)
       } else {
         // Still pending - show compact status
-        const statusInfo = await rift.getStatusString(swapId)
+        const statusInfo = await checker.getStatusString(swapId)
         lines.push(`  ⏳ [${tag}] ${colorPair(swap.inputToken, swap.outputToken)} (${swap.inputAmount}) | ${elapsedMins}m | ${statusInfo}`)
       }
       

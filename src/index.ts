@@ -1,11 +1,12 @@
 import { logAccountConfig } from './account.js'
 import { rift } from './providers/rift.js'
 // import { thorchain } from './providers/thorchain.js'
-// import { relay } from './providers/relay.js'
+import { relay } from './providers/relay.js'
 import { type SwapParams, colorToken, colorPair } from './providers/types.js'
 import { logQuote, logSwap } from './csv.js'
 import { startServer } from './server.js'
 import { trackSwap, startSettlementWatcher } from './settlement-tracker.js'
+import { getTokenPrices } from './prices.js'
 import {
   TWO_HOURS_MS,
   SEVEN_DAYS_MS,
@@ -19,27 +20,22 @@ import {
 // ACTIVE PROVIDERS
 // ============================================================================
 const PROVIDERS = {
-  rift: true,
+  rift: false,
+  relay: true,
   // thorchain: true,
-  // relay: true,
 }
 
-// Parse CLI args: --execute or --no-execute
+// parse CLI args (--execute)
 const args = process.argv.slice(2)
-const EXECUTE_SWAPS = args.includes('--execute')
-  ? true
-  : args.includes('--no-execute')
-    ? false
-    : DEFAULT_EXECUTE_SWAPS
+const EXECUTE_SWAPS = args.includes('--execute') ? true : args.includes('--no-execute') ? false : DEFAULT_EXECUTE_SWAPS
 
 // main quoting/swapping function
 async function executeSwaps(swaps: SwapParams[]) {
-  const direction = swaps[0]?.inputToken === 'BTC' 
-    ? `${colorToken('BTC')} -> ${colorToken('EVM')}` 
-    : `${colorToken('EVM')} -> ${colorToken('BTC')}`
-  console.log(`\n${'='.repeat(50)}`)
-  console.log(`${direction} | ${new Date().toISOString()}`)
-  console.log('='.repeat(50))
+  const direction = swaps[0]?.inputToken === 'BTC' ? `${colorToken('BTC')} -> ${colorToken('EVM')}` : `${colorToken('EVM')} -> ${colorToken('BTC')}`
+  console.log(`\n${'='.repeat(50)}\n${direction} | ${new Date().toISOString()}\n${'='.repeat(50)}`)
+
+  // fetch current token prices
+  const prices = await getTokenPrices()
 
   for (const swap of swaps) {
     // ---------------------------------- RIFT --------------------------------------
@@ -47,12 +43,11 @@ async function executeSwaps(swaps: SwapParams[]) {
       try {
         const { quote, execute } = await rift.getQuote(swap)
         console.log(`\n[${rift.name}] Quote: ${swap.inputAmount} ${colorToken(swap.inputToken)} -> ${quote.outputAmount} ${colorToken(swap.outputToken)}`)
-        console.log(`  Fee: $${quote.feeUsd.toFixed(4)} (${quote.feePercent.toFixed(2)}%)`)
-        logQuote(quote)
+        logQuote(quote, prices)
 
         if (EXECUTE_SWAPS) {
           const result = await execute()
-          logSwap(result)
+          logSwap(result, prices)
 
           // Track swap for settlement in background (non-blocking)
           if (result.swapId) {
@@ -64,39 +59,40 @@ async function executeSwaps(swaps: SwapParams[]) {
       }
     }
 
+    
+    // ---------------------------------- RELAY --------------------------------------
+    if (PROVIDERS.relay) {
+      try {
+        const { quote, execute } = await relay.getQuote(swap)
+        console.log(`\n[${relay.name}] Quote: ${swap.inputAmount} ${colorToken(swap.inputToken)} -> ${quote.outputAmount} ${colorToken(swap.outputToken)}`)
+        logQuote(quote, prices)
+        
+        if (EXECUTE_SWAPS) {
+          const result = await execute()
+          logSwap(result, prices)
+          if (result.swapId) trackSwap(result)
+        }
+      } catch (err) {
+        console.error(`  ❌ Relay Error: ${err instanceof Error ? err.message : err}`)
+      }
+    }
+
+
     // ---------------------------------- THORCHAIN --------------------------------------
     // if (PROVIDERS.thorchain) {
     //   try {
     //     const { quote, execute } = await thorchain.getQuote(swap)
     //     console.log(`\n[${thorchain.name}] Quote: ${swap.inputAmount} ${colorToken(swap.inputToken)} -> ${quote.outputAmount} ${colorToken(swap.outputToken)}`)
     //     console.log(`  Fee: $${quote.feeUsd.toFixed(4)} (${quote.feePercent.toFixed(2)}%)`)
-    //     logQuote(quote)
+    //     logQuote(quote, prices)
     //
     //     if (EXECUTE_SWAPS) {
     //       const result = await execute()
-    //       logSwap(result)
+    //       logSwap(result, prices)
     //       if (result.swapId) trackSwap(result)
     //     }
     //   } catch (err) {
     //     console.error(`  ❌ Thorchain Error: ${err instanceof Error ? err.message : err}`)
-    //   }
-    // }
-
-    // ---------------------------------- RELAY --------------------------------------
-    // if (PROVIDERS.relay) {
-    //   try {
-    //     const { quote, execute } = await relay.getQuote(swap)
-    //     console.log(`\n[${relay.name}] Quote: ${swap.inputAmount} ${colorToken(swap.inputToken)} -> ${quote.outputAmount} ${colorToken(swap.outputToken)}`)
-    //     console.log(`  Fee: $${quote.feeUsd.toFixed(4)} (${quote.feePercent.toFixed(2)}%)`)
-    //     logQuote(quote)
-    //
-    //     if (EXECUTE_SWAPS) {
-    //       const result = await execute()
-    //       logSwap(result)
-    //       if (result.swapId) trackSwap(result)
-    //     }
-    //   } catch (err) {
-    //     console.error(`  ❌ Relay Error: ${err instanceof Error ? err.message : err}`)
     //   }
     // }
   }
@@ -105,11 +101,15 @@ async function executeSwaps(swaps: SwapParams[]) {
 async function main() {
   const activeProviders = Object.entries(PROVIDERS).filter(([, v]) => v).map(([k]) => k)
   
-  console.log('🚀 Fee Comp Server starting...')
-  console.log(`📅 ${new Date().toISOString()}`)
-  console.log(`⏱️  Running for 7 days, swapping every 2 hours`)
-  console.log(`💱 Execute swaps: ${EXECUTE_SWAPS ? 'YES' : 'NO (quotes only)'}`)
-  console.log(`🔌 Providers: ${activeProviders.join(', ') || 'none'}`)
+  const green = '\x1b[38;5;120m'
+  const yellow = '\x1b[33m'
+  const white = '\x1b[97m'
+  const reset = '\x1b[0m'
+  
+  console.log(`${green}🚀 Fee Comp Server starting...${reset}`)
+  console.log(`${green}⏱️  Running for ${yellow}7 days${green}, swapping every ${yellow}2 hours${reset}`)
+  console.log(`${green}💱 Execute swaps: ${EXECUTE_SWAPS ? `${green}YES` : `${yellow}NO (quotes only)`}${reset}`)
+  console.log(`${green}🔌 Providers: ${white}${activeProviders.join(', ') || 'none'}${reset}`)
   console.log('')
   logAccountConfig()
   startServer()
@@ -141,6 +141,7 @@ async function main() {
   let nextSwapTime = Date.now() + TWO_HOURS_MS
 
   // live countdown timer
+  console.log('')
   const countdownInterval = setInterval(() => {
     const remaining = nextSwapTime - Date.now()
     if (remaining <= 0) return
