@@ -62,6 +62,7 @@ const pendingSwaps = new Map<string, {
   details?: unknown
   btcPayoutTxHash?: string | null
   ethDepositTxHash?: string | null
+  requestId?: string | null
 }>()
 
 export interface RelayQuoteResult {
@@ -114,14 +115,23 @@ export const relay = {
       throw new Error('Relay: No quote returned')
     }
 
+    // Log the full quote response to find requestId
+    console.log(`   📋 Quote Response Keys: ${Object.keys(quoteResponse).join(', ')}`)
+    const qr = quoteResponse as Record<string, unknown>
+    if (qr.requestId) {
+      console.log(`   🔑 Request ID: ${qr.requestId}`)
+    }
+
     // Extract output amount from quote
     const quoteData = quoteResponse as unknown as {
       details?: {
         currencyOut?: { amount?: string }
       }
+      requestId?: string
     }
 
     const outputAmount = quoteData.details?.currencyOut?.amount || '0'
+    const requestId = quoteData.requestId
 
     const quoteResult: Quote = {
       provider: 'Relay',
@@ -280,17 +290,21 @@ export const relay = {
 
       const swapId = ethDepositTxHash || finalTxHashes[0] || `relay-${Date.now()}`
       
-      // Store for settlement tracking
+      // Store for settlement tracking (include requestId from quote for API tracking)
       pendingSwaps.set(swapId, {
         status: finalStatus,
         txHashes: finalTxHashes,
         details: finalDetails,
         btcPayoutTxHash,
         ethDepositTxHash,
+        requestId,
       })
 
       console.log(`✅ Relay swap ${finalStatus === 'complete' ? 'completed' : 'initiated'}`)
       console.log(`   Deposit Tx (ETH): ${ethDepositTxHash || 'N/A'}`)
+      if (requestId) {
+        console.log(`   Request ID: ${requestId}`)
+      }
       if (btcPayoutTxHash) {
         console.log(`   Payout Tx (BTC): ${btcPayoutTxHash}`)
         console.log(`   https://mempool.space/tx/${btcPayoutTxHash}`)
@@ -327,13 +341,24 @@ export const relay = {
       [key: string]: unknown
     }
     
+    // Check if we have a stored requestId for this swap
+    const storedSwap = pendingSwaps.get(swapId)
+    const requestId = storedSwap?.requestId
+    
     try {
       // Try multiple API endpoints/params to find the right one
-      const endpoints = [
-        `https://api.relay.link/intents/status?txHash=${swapId}`,
-        `https://api.relay.link/intents/status/v2?txHash=${swapId}`,
-        `https://api.relay.link/requests/${swapId}/status`,
-      ]
+      // Prioritize requestId if available
+      const endpoints: string[] = []
+      
+      if (requestId) {
+        endpoints.push(`https://api.relay.link/intents/status?requestId=${requestId}`)
+        endpoints.push(`https://api.relay.link/intents/status/v2?requestId=${requestId}`)
+      }
+      
+      // Also try with txHash
+      endpoints.push(`https://api.relay.link/intents/status?txHash=${swapId}`)
+      endpoints.push(`https://api.relay.link/intents/status/v2?txHash=${swapId}`)
+      endpoints.push(`https://api.relay.link/requests/${swapId}/status`)
       
       let data: RelayStatusResponse | null = null
       
