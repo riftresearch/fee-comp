@@ -13,8 +13,8 @@ export const EXECUTE_SWAPS = false
 export const evmToBtcSwaps: SwapParams[] = [
   // $~20 - TEST SWAPS
   { inputToken: 'CBBTC', outputToken: 'BTC', inputAmount: '0.0002' },
-  // { inputToken: 'USDC', outputToken: 'BTC', inputAmount: '20' },
-  // { inputToken: 'ETH', outputToken: 'BTC', inputAmount: '0.006' },
+  { inputToken: 'USDC', outputToken: 'BTC', inputAmount: '20' },
+  { inputToken: 'ETH', outputToken: 'BTC', inputAmount: '0.006' },
   // broken ^ retest
 
 

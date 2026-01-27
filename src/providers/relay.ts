@@ -3,6 +3,7 @@ import {
   mainnetWalletClient,
   EVM_ADDRESS,
   BTC_ADDRESS,
+  sendBitcoin,
 } from '../account.js'
 import {
   type Quote,
@@ -62,7 +63,7 @@ const pendingSwaps = new Map<string, {
   details?: unknown
   btcPayoutTxHash?: string | null
   ethDepositTxHash?: string | null
-  requestId?: string | null
+  relayRequestId?: string | null  // The actual Relay API request ID
 }>()
 
 export interface RelayQuoteResult {
@@ -115,23 +116,21 @@ export const relay = {
       throw new Error('Relay: No quote returned')
     }
 
-    // Log the full quote response to find requestId
-    console.log(`   📋 Quote Response Keys: ${Object.keys(quoteResponse).join(', ')}`)
-    const qr = quoteResponse as Record<string, unknown>
-    if (qr.requestId) {
-      console.log(`   🔑 Request ID: ${qr.requestId}`)
-    }
-
-    // Extract output amount from quote
+    // Extract output amount and requestId from quote
     const quoteData = quoteResponse as unknown as {
       details?: {
         currencyOut?: { amount?: string }
       }
-      requestId?: string
+      steps?: Array<{ requestId?: string }>
     }
 
     const outputAmount = quoteData.details?.currencyOut?.amount || '0'
-    const requestId = quoteData.requestId
+    
+    // Extract the Relay requestId from the steps
+    const relayRequestId = quoteData.steps?.[0]?.requestId || null
+    if (relayRequestId) {
+      console.log(`   ✅ Found Relay Request ID: ${relayRequestId}`)
+    }
 
     const quoteResult: Quote = {
       provider: 'Relay',
@@ -148,6 +147,12 @@ export const relay = {
       console.log(`   Amount: ${inputAmount} ${colorToken(inputToken)}`)
       console.log(`   Recipient: ${recipient}`)
 
+      // Handle BTC→EVM swaps differently (send BTC to deposit address)
+      if (isBtcInput) {
+        return await executeBtcToEvm()
+      }
+
+      // EVM→BTC: Use SDK execute
       if (!mainnetWalletClient) {
         throw new Error('Relay: Wallet client not available')
       }
@@ -165,7 +170,8 @@ export const relay = {
           quote: quoteResponse,
           wallet: mainnetWalletClient as any,
           depositGasLimit: '1000000', // Higher gas limit for complex swaps
-          onProgress: ({ steps, fees, breakdown, currentStep, currentStepItem, txHashes, details }) => {
+          onProgress: (progressData) => {
+            const { steps, fees, breakdown, currentStep, currentStepItem, txHashes, details } = progressData
             
             // store data
             finalTxHashes = (txHashes || []).map((tx: { txHash: string }) => tx.txHash)
@@ -203,7 +209,7 @@ export const relay = {
                 console.log(`      Rate: ${d.rate}`)
               }
               if (d.recipient) {
-                console.log(`      BTC Recipient: ${d.recipient}`)
+                console.log(`      EVM Recipient: ${d.recipient}`)
               }
               // Check if details has txHashes with BTC
               if (d.txHashes) {
@@ -297,24 +303,93 @@ export const relay = {
         details: finalDetails,
         btcPayoutTxHash,
         ethDepositTxHash,
-        requestId,
+        relayRequestId,
       })
 
-      console.log(`✅ Relay swap ${finalStatus === 'complete' ? 'completed' : 'initiated'}`)
-      console.log(`   Deposit Tx (ETH): ${ethDepositTxHash || 'N/A'}`)
-      if (requestId) {
-        console.log(`   Request ID: ${requestId}`)
-      }
-      if (btcPayoutTxHash) {
-        console.log(`   Payout Tx (BTC): ${btcPayoutTxHash}`)
-        console.log(`   https://mempool.space/tx/${btcPayoutTxHash}`)
-      }
+      console.log(`✅ Relay swap deposited`)
+      console.log(`   📋 Swap ID (for CSV): ${swapId}`)
+      console.log(`   📋 Relay Request ID (for API): ${relayRequestId}`)
+      console.log(`   📋 ETH Deposit Tx: ${ethDepositTxHash || 'N/A'}`)
+      console.log(`   Waiting for BTC payout...`)
 
       return {
         provider: 'Relay',
         success: true,
         swapId,
         txHash: finalTxHashes[0] || null,
+        inputToken,
+        outputToken,
+        inputAmount,
+        outputAmount,
+        timestamp: Date.now(),
+      }
+    }
+
+    // BTC→EVM: Send BTC to deposit address from quote
+    async function executeBtcToEvm(): Promise<SwapResult> {
+      // Extract deposit address from quote steps
+      const steps = (quoteResponse as { steps?: Array<{ items?: Array<{ data?: { to?: string } }> }> }).steps
+      let depositAddress: string | null = null
+      
+      // Look for BTC deposit address in steps
+      if (steps) {
+        for (const step of steps) {
+          for (const item of step.items || []) {
+            // The deposit address should be a BTC address (starts with bc1, 1, or 3)
+            const to = item.data?.to
+            if (to && (to.startsWith('bc1') || to.startsWith('1') || to.startsWith('3'))) {
+              depositAddress = to
+              break
+            }
+          }
+          if (depositAddress) break
+        }
+      }
+      
+      // Also check details for deposit address
+      if (!depositAddress) {
+        const details = (quoteResponse as { details?: { depositAddress?: string } }).details
+        depositAddress = details?.depositAddress || null
+      }
+      
+      if (!depositAddress) {
+        // Log the quote structure to debug
+        console.log(`   ⚠️ Could not find BTC deposit address in quote`)
+        console.log(`   Quote keys: ${Object.keys(quoteResponse).join(', ')}`)
+        const qr = quoteResponse as Record<string, unknown>
+        if (qr.steps) {
+          console.log(`   Steps: ${JSON.stringify(qr.steps, null, 2).slice(0, 500)}...`)
+        }
+        throw new Error('Relay: Could not find BTC deposit address in quote')
+      }
+      
+      console.log(`   📍 BTC Deposit Address: ${depositAddress}`)
+      
+      // Send BTC to the deposit address
+      const amountSats = BigInt(amount)
+      console.log(`   📤 Sending ${amountSats} sats to ${depositAddress}...`)
+      
+      const btcTxHash = await sendBitcoin(depositAddress, amountSats)
+      
+      console.log(`✅ Relay BTC deposit sent`)
+      console.log(`   BTC Tx: ${btcTxHash}`)
+      console.log(`   https://mempool.space/tx/${btcTxHash}`)
+      console.log(`   Waiting for EVM payout...`)
+      
+      // Store for settlement tracking
+      pendingSwaps.set(btcTxHash, {
+        status: 'pending',
+        txHashes: [btcTxHash],
+        details: null,
+        btcPayoutTxHash: btcTxHash,
+        ethDepositTxHash: null,
+      })
+      
+      return {
+        provider: 'Relay',
+        success: true,
+        swapId: btcTxHash,
+        txHash: btcTxHash,
         inputToken,
         outputToken,
         inputAmount,
@@ -331,94 +406,114 @@ export const relay = {
    */
   async checkSettlementOnce(swapId: string, verbose = true): Promise<SettlementResult | null> {
     // swapId is the ETH deposit tx hash
-    // Query Relay's intents/status API to check if BTC payout has been made
+    // Query Relay's requests API to check if BTC payout has been made
     
-    interface RelayStatusResponse {
-      status?: string
-      txHashes?: Array<string | { txHash: string; chainId?: number }>
-      outTxs?: Array<{ txHash: string; chainId?: number }>
-      amountOut?: string
-      [key: string]: unknown
+    interface RelayRequestResponse {
+      requests?: Array<{
+        id: string
+        status: string
+        recipient?: string
+        data?: {
+          outTxs?: Array<{
+            hash: string
+            chainId: number
+            stateChanges?: Array<{
+              address: string
+              change: {
+                balanceDiff: string
+              }
+            }>
+          }>
+          metadata?: {
+            currencyOut?: {
+              amount?: string
+              amountFormatted?: string
+            }
+          }
+        }
+      }>
     }
     
-    // Check if we have a stored requestId for this swap
-    const storedSwap = pendingSwaps.get(swapId)
-    const requestId = storedSwap?.requestId
-    
     try {
-      // Try multiple API endpoints/params to find the right one
-      // Prioritize requestId if available
-      const endpoints: string[] = []
+      // Check if we have stored info for this swap
+      const storedSwap = pendingSwaps.get(swapId)
       
-      if (requestId) {
-        endpoints.push(`https://api.relay.link/intents/status?requestId=${requestId}`)
-        endpoints.push(`https://api.relay.link/intents/status/v2?requestId=${requestId}`)
+      // Get the Relay Request ID - this is what we need for the API
+      const relayRequestId = storedSwap?.relayRequestId
+      
+      if (!relayRequestId) {
+        console.log(`   ⚠️ No Relay Request ID stored for swap ${swapId.slice(0, 16)}...`)
+        return null
       }
       
-      // Also try with txHash
-      endpoints.push(`https://api.relay.link/intents/status?txHash=${swapId}`)
-      endpoints.push(`https://api.relay.link/intents/status/v2?txHash=${swapId}`)
-      endpoints.push(`https://api.relay.link/requests/${swapId}/status`)
+      console.log(`   🔍 Checking Relay Request ID: ${relayRequestId}`)
       
-      let data: RelayStatusResponse | null = null
+      // Use the relay-api-proxy endpoint with browser-like headers
+      const url = `https://relay-api-proxy.relay-link.workers.dev/api/requests/v2?id=${relayRequestId}`
+      console.log(`   🔗 https://relay.link/transaction/${relayRequestId}`)
       
-      for (const url of endpoints) {
-        console.log(`   🔍 Trying: ${url}`)
-        const response = await fetch(url)
-        if (response.ok) {
-          data = await response.json() as RelayStatusResponse
-          console.log(`   📡 Response:`)
-          console.log(JSON.stringify(data, null, 2).split('\n').map(l => '      ' + l).join('\n'))
-          if (data && data.status && data.status !== 'unknown') {
-            break // Found valid response
-          }
-        } else {
-          console.log(`      ❌ ${response.status}`)
-        }
+      const response = await fetch(url, {
+        headers: {
+          'accept': '*/*',
+          'accept-language': 'en-US,en;q=0.9',
+          'referer': `https://relay.link/transaction/${swapId}`,
+          'origin': 'https://relay.link',
+        },
+      })
+      if (!response.ok) {
+        console.log(`   ❌ API error: ${response.status}`)
+        return null
       }
       
-      if (!data || data.status === 'unknown') {
-        console.log(`   ⚠️ No valid status found from Relay API`)
+      const data = await response.json() as RelayRequestResponse
+      console.log(`   📡 Response status: ${data.requests?.[0]?.status || 'no requests'}`)
+      
+      const request = data.requests?.[0]
+      if (!request) {
+        console.log(`   ⚠️ No request found`)
         return null
       }
       
       // Check if swap is complete
-      if (data.status === 'success' || data.status === 'complete') {
-        // Look for BTC tx in txHashes (output transactions)
-        let btcTxHash: string | null = null
+      if (request.status === 'success') {
+        // Find output transaction - could be BTC (EVM→BTC) or EVM (BTC→EVM)
+        const btcOutTx = request.data?.outTxs?.find(tx => tx.chainId === BITCOIN_CHAIN_ID)
+        const evmOutTx = request.data?.outTxs?.find(tx => tx.chainId === ETHEREUM_CHAIN_ID)
+        
+        // Determine payout tx hash based on direction
+        const payoutTxHash = btcOutTx?.hash || (evmOutTx?.hash ? `0x${evmOutTx.hash.replace(/^0x/, '')}` : null)
+        const isBtcPayout = !!btcOutTx
+        
+        // Get actual output amount from metadata or stateChanges
         let actualOutput: string | null = null
         
-        // txHashes contains output transactions
-        if (data.txHashes && Array.isArray(data.txHashes)) {
-          for (const tx of data.txHashes) {
-            // BTC txs don't have 0x prefix
-            if (typeof tx === 'string' && !tx.startsWith('0x')) {
-              btcTxHash = tx
-            } else if (typeof tx === 'object' && tx.txHash) {
-              if (tx.chainId === BITCOIN_CHAIN_ID || !tx.txHash.startsWith('0x')) {
-                btcTxHash = tx.txHash
-              }
-            }
+        // Try metadata first
+        if (request.data?.metadata?.currencyOut?.amount) {
+          actualOutput = request.data.metadata.currencyOut.amount
+        }
+        
+        // Or find from stateChanges (positive balanceDiff to recipient)
+        const outTx = btcOutTx || evmOutTx
+        if (!actualOutput && outTx?.stateChanges && request.recipient) {
+          const recipientChange = outTx.stateChanges.find(
+            sc => sc.address.toLowerCase() === request.recipient?.toLowerCase() && 
+                  parseInt(sc.change.balanceDiff) > 0
+          )
+          if (recipientChange) {
+            actualOutput = recipientChange.change.balanceDiff
           }
         }
         
-        // Also check for outTxs or similar fields
-        if (!btcTxHash && data.outTxs) {
-          for (const tx of data.outTxs) {
-            if (tx.chainId === BITCOIN_CHAIN_ID || (tx.txHash && !tx.txHash.startsWith('0x'))) {
-              btcTxHash = tx.txHash
-            }
-          }
+        console.log(`   ✅ Relay swap completed!`)
+        if (payoutTxHash) {
+          const explorer = isBtcPayout 
+            ? `https://mempool.space/tx/${payoutTxHash}`
+            : `https://etherscan.io/tx/${payoutTxHash}`
+          console.log(`   🔗 ${isBtcPayout ? 'BTC' : 'ETH'} Payout Tx: ${payoutTxHash}`)
+          console.log(`      ${explorer}`)
         }
-        
-        // Try to get actual output amount
-        if (data.amountOut) {
-          actualOutput = data.amountOut
-        }
-        
-        if (verbose && btcTxHash) {
-          console.log(`   ✅ BTC Payout Tx: ${btcTxHash}`)
-          console.log(`      https://mempool.space/tx/${btcTxHash}`)
+        if (actualOutput) {
+          console.log(`   💰 Actual Output: ${actualOutput}`)
         }
         
         pendingSwaps.delete(swapId)
@@ -426,22 +521,18 @@ export const relay = {
         return {
           swapId,
           status: 'completed',
-          payoutTxHash: btcTxHash,
+          payoutTxHash,
           actualOutputAmount: actualOutput,
           settledAt: Date.now(),
         }
       }
       
       // Still pending
-      if (verbose) {
-        console.log(`   [${swapId.slice(0, 8)}...] Status: ${data.status || 'pending'}`)
-      }
-      
+      console.log(`   ⏳ Status: ${request.status}`)
       return null
+      
     } catch (error) {
-      if (verbose) {
-        console.log(`   [${swapId.slice(0, 8)}...] Error checking status:`, error)
-      }
+      console.log(`   ❌ Error checking status:`, error)
       return null
     }
   },
@@ -451,6 +542,12 @@ export const relay = {
    */
   async getStatusString(swapId: string): Promise<string> {
     const swap = pendingSwaps.get(swapId)
-    return swap?.status || 'unknown'
+    if (!swap) return 'unknown'
+    
+    // Map internal status to user-friendly display
+    const status = swap.status
+    if (status === 'complete') return 'confirming'  // Deposit done, awaiting BTC
+    if (status === 'pending') return 'processing'
+    return status
   },
 }

@@ -651,56 +651,121 @@ export function startServer() {
       border-color: var(--accent-blue);
     }
 
-    .journeys-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    .journey-header-row {
+      display: flex;
+      align-items: center;
       gap: 16px;
+      padding: 8px 16px;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 8px;
     }
 
-    .journey-card {
+    .journey-header-label {
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+
+    .journeys-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .journey-row {
       background: var(--bg-card);
       border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 16px;
-      transition: all 0.2s ease;
+      border-radius: 8px;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      transition: all 0.15s ease;
+      cursor: pointer;
     }
 
-    .journey-card:hover {
+    .journey-row:hover {
       border-color: var(--border-light);
+      background: rgba(255, 255, 255, 0.02);
     }
 
-    .journey-card.settled {
+    .journey-row.settled {
       border-left: 3px solid var(--accent-green);
     }
 
-    .journey-card.pending {
+    .journey-row.pending {
       border-left: 3px solid var(--accent-orange);
     }
 
-    .journey-card.stuck {
+    .journey-row.stuck {
       border-left: 3px solid var(--accent-red);
     }
 
-    .journey-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 12px;
+    .journey-provider {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      min-width: 50px;
     }
 
-    .journey-pair {
+    .journey-provider.rift { color: var(--accent-blue); }
+    .journey-provider.relay { color: var(--accent-purple); }
+
+    .journey-direction {
       font-family: 'Fira Code', monospace;
-      font-size: 1rem;
-      font-weight: 600;
+      font-size: 0.85rem;
       color: var(--text-primary);
+      min-width: 120px;
+    }
+
+    .journey-amount {
+      font-family: 'Fira Code', monospace;
+      font-size: 0.8rem;
+      color: var(--accent-green);
+      min-width: 100px;
+    }
+
+    .journey-steps {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      flex: 1;
+    }
+
+    .journey-step {
+      font-size: 0.75rem;
+      font-family: 'Fira Code', monospace;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .journey-step.active {
+      color: var(--text-secondary);
+    }
+
+    .journey-step.inactive {
+      opacity: 0.5;
+    }
+
+    .journey-time {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      min-width: 60px;
+      text-align: right;
     }
 
     .journey-status {
-      font-size: 0.7rem;
+      font-size: 0.65rem;
       font-weight: 600;
       text-transform: uppercase;
-      padding: 4px 8px;
+      padding: 4px 10px;
       border-radius: 4px;
+      min-width: 70px;
+      text-align: center;
     }
 
     .journey-status.settled {
@@ -716,97 +781,6 @@ export function startServer() {
     .journey-status.stuck {
       background: rgba(239, 68, 68, 0.1);
       color: var(--accent-red);
-    }
-
-    .journey-amount {
-      font-family: 'Fira Code', monospace;
-      font-size: 0.9rem;
-      color: var(--accent-green);
-      margin-bottom: 12px;
-    }
-
-    .journey-timeline {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    .journey-step {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-size: 0.8rem;
-    }
-
-    .step-icon {
-      width: 24px;
-      height: 24px;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 0.7rem;
-      flex-shrink: 0;
-    }
-
-    .step-icon.quote {
-      background: rgba(136, 136, 160, 0.1);
-      color: var(--text-secondary);
-    }
-
-    .step-icon.swap {
-      background: rgba(245, 158, 11, 0.1);
-      color: var(--accent-orange);
-    }
-
-    .step-icon.settlement {
-      background: rgba(34, 197, 94, 0.1);
-      color: var(--accent-green);
-    }
-
-    .step-icon.missing {
-      background: rgba(85, 85, 104, 0.1);
-      color: var(--text-muted);
-      border: 1px dashed var(--border);
-    }
-
-    .step-content {
-      flex: 1;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .step-label {
-      color: var(--text-secondary);
-    }
-
-    .step-time {
-      color: var(--text-muted);
-      font-size: 0.75rem;
-    }
-
-    .journey-footer {
-      margin-top: 12px;
-      padding-top: 12px;
-      border-top: 1px solid var(--border);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 0.75rem;
-    }
-
-    .journey-fee {
-      color: var(--accent-orange);
-      font-family: 'Fira Code', monospace;
-    }
-
-    .journey-provider {
-      color: var(--text-muted);
-    }
-
-    .journey-elapsed {
-      color: var(--text-muted);
     }
 
     /* Responsive */
@@ -930,6 +904,14 @@ export function startServer() {
           </select>
           <span style="color: var(--text-muted); font-size: 0.8rem;" id="journeyCount">0 swaps</span>
         </div>
+      </div>
+      <div class="journey-header-row">
+        <span class="journey-header-label" style="min-width: 50px;">Provider</span>
+        <span class="journey-header-label" style="min-width: 120px;">Direction</span>
+        <span class="journey-header-label" style="min-width: 100px;">Amount</span>
+        <span class="journey-header-label" style="flex: 1;">Quote → Swap → Settlement</span>
+        <span class="journey-header-label" style="min-width: 60px; text-align: right;">Elapsed</span>
+        <span class="journey-header-label" style="min-width: 70px; text-align: center;">Status</span>
       </div>
       <div class="journeys-grid" id="journeysGrid">
         <div style="color: var(--text-muted); padding: 40px; text-align: center;">Loading...</div>
@@ -1123,40 +1105,23 @@ export function startServer() {
       
       const formatTime = (ts) => ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'
       
+      const providerClass = journey.provider.toLowerCase()
+      const quoteTime = journey.quote ? formatTime(journey.quote.timestamp) : '—'
+      const swapTime = formatTime(journey.swap.timestamp)
+      const settlementTime = journey.settlement ? formatTime(journey.settlement.timestamp) : '—'
+      
       return \`
-        <div class="journey-card \${statusClass}" onclick="showJourneyDetails(\${idx})" style="cursor: pointer;">
-          <div class="journey-header">
-            <span class="journey-pair">\${journey.inputToken} → \${journey.outputToken}</span>
-            <span class="journey-status \${statusClass}">\${statusLabel}</span>
+        <div class="journey-row \${statusClass}" onclick="showJourneyDetails(\${idx})">
+          <span class="journey-provider \${providerClass}">\${journey.provider}</span>
+          <span class="journey-direction">\${journey.inputToken} → \${journey.outputToken}</span>
+          <span class="journey-amount">\${journey.inputAmount} \${journey.inputToken}</span>
+          <div class="journey-steps">
+            <span class="journey-step \${journey.quote ? 'active' : 'inactive'}">📊 \${quoteTime}</span>
+            <span class="journey-step active">🔄 \${swapTime}</span>
+            <span class="journey-step \${journey.settlement ? 'active' : 'inactive'}">\${journey.settlement ? '✅' : '⏳'} \${settlementTime}</span>
           </div>
-          <div class="journey-amount">\${journey.inputAmount} \${journey.inputToken}</div>
-          <div class="journey-timeline">
-            <div class="journey-step">
-              <div class="step-icon \${journey.quote ? 'quote' : 'missing'}">📊</div>
-              <div class="step-content">
-                <span class="step-label">Quote</span>
-                <span class="step-time">\${journey.quote ? formatTime(journey.quote.timestamp) : '—'}</span>
-              </div>
-            </div>
-            <div class="journey-step">
-              <div class="step-icon swap">🔄</div>
-              <div class="step-content">
-                <span class="step-label">Swap</span>
-                <span class="step-time">\${formatTime(journey.swap.timestamp)}</span>
-              </div>
-            </div>
-            <div class="journey-step">
-              <div class="step-icon \${journey.settlement ? 'settlement' : 'missing'}">\${journey.settlement ? '✅' : '⏳'}</div>
-              <div class="step-content">
-                <span class="step-label">Settlement</span>
-                <span class="step-time">\${journey.settlement ? formatTime(journey.settlement.timestamp) : 'waiting...'}</span>
-              </div>
-            </div>
-          </div>
-          <div class="journey-footer">
-            <span class="journey-provider">⚡ \${journey.provider}</span>
-            <span class="journey-elapsed">\${formatElapsed(elapsed)}</span>
-          </div>
+          <span class="journey-time">\${formatElapsed(elapsed)}</span>
+          <span class="journey-status \${statusClass}">\${statusLabel}</span>
         </div>
       \`
     }
