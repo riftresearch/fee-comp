@@ -15,7 +15,7 @@ export const evmToBtcSwaps: SwapParams[] = [
   { inputToken: 'CBBTC', outputToken: 'BTC', inputAmount: '0.0002' },
   { inputToken: 'USDC', outputToken: 'BTC', inputAmount: '20' },
   { inputToken: 'ETH', outputToken: 'BTC', inputAmount: '0.006' },
-  // broken ^ retest
+  // broken ^ retest (for rift at least)
 
 
   // // $~100 - SMALL TIER SWAPS
