@@ -298,6 +298,19 @@ function cleanupExpiredReservations(): void {
   }
 }
 
+/**
+ * Check if a UTXO key is reserved locally
+ */
+function isUtxoKeyReserved(key: string): boolean {
+  const reservation = reservedUtxos.get(key)
+  if (!reservation) return false
+  if (Date.now() > reservation.expiresAt) {
+    reservedUtxos.delete(key)
+    return false
+  }
+  return true
+}
+
 // ============================================================================
 // UTXO FETCHING
 // ============================================================================
@@ -338,6 +351,66 @@ async function broadcastTx(txHex: string): Promise<string> {
     throw new Error(`Broadcast failed: ${error}`)
   }
   return res.text() // Returns txid
+}
+
+// ============================================================================
+// PSBT VALIDATION (for external PSBTs like from Relay)
+// ============================================================================
+
+interface PsbtUtxoConflict {
+  txid: string
+  vout: number
+  reason: 'mempool' | 'reserved'
+}
+
+/**
+ * Validate that a PSBT's input UTXOs are still available
+ * Returns array of conflicts (empty if all inputs are valid)
+ */
+export async function validatePsbtUtxos(psbtHex: string): Promise<PsbtUtxoConflict[]> {
+  // Clean up expired reservations first
+  cleanupExpiredReservations()
+  
+  // Parse the PSBT
+  const psbt = bitcoin.Psbt.fromHex(psbtHex, { network: btcNetwork })
+  
+  // Extract input txid:vout pairs from the PSBT
+  const inputUtxos: { txid: string; vout: number; key: string }[] = []
+  for (let i = 0; i < psbt.inputCount; i++) {
+    const input = psbt.txInputs[i]
+    // txid is stored as reversed buffer in bitcoinjs
+    const txid = Buffer.from(input.hash).reverse().toString('hex')
+    const vout = input.index
+    inputUtxos.push({ txid, vout, key: `${txid}:${vout}` })
+  }
+  
+  // Get our BTC address to check pending spends
+  const keyPair = ECPair.fromWIF(btcPrivateKey!, btcNetwork)
+  const { address } = bitcoin.payments.p2wpkh({
+    pubkey: Buffer.from(keyPair.publicKey),
+    network: btcNetwork,
+  })
+  
+  // Fetch pending spends from mempool
+  const pendingSpends = address ? await getPendingSpends(address) : new Set<string>()
+  
+  // Check each input for conflicts
+  const conflicts: PsbtUtxoConflict[] = []
+  
+  for (const utxo of inputUtxos) {
+    // Check if spent in mempool
+    if (pendingSpends.has(utxo.key)) {
+      conflicts.push({ txid: utxo.txid, vout: utxo.vout, reason: 'mempool' })
+      continue
+    }
+    
+    // Check if locally reserved
+    if (isUtxoKeyReserved(utxo.key)) {
+      conflicts.push({ txid: utxo.txid, vout: utxo.vout, reason: 'reserved' })
+    }
+  }
+  
+  return conflicts
 }
 
 // Send Bitcoin with dynamic fee estimation and UTXO locking
@@ -504,4 +577,60 @@ export async function sendBitcoin(
     releaseUtxos(selectedUtxos)
     throw err
   }
+}
+
+/**
+ * Sign and broadcast a PSBT provided by an external service (like Relay)
+ * The PSBT should already have the inputs and outputs defined
+ */
+export async function signAndBroadcastPsbt(psbtHex: string): Promise<string> {
+  console.log(`📝 Signing external PSBT...`)
+  
+  const btcPrivateKey = process.env.BTC_PRIVATE_KEY
+  if (!btcPrivateKey) {
+    throw new Error('BTC_PRIVATE_KEY not set')
+  }
+  
+  // Validate UTXO availability before signing (prevents cryptic RBF errors)
+  const conflicts = await validatePsbtUtxos(psbtHex)
+  if (conflicts.length > 0) {
+    const details = conflicts.map(c => 
+      `${c.txid.slice(0, 8)}...${c.txid.slice(-4)}:${c.vout} (${c.reason})`
+    ).join(', ')
+    throw new Error(`UTXO conflict: ${conflicts.length} input(s) unavailable - ${details}`)
+  }
+  
+  // Parse private key
+  const keyPair = ECPair.fromWIF(btcPrivateKey, btcNetwork)
+  
+  // Parse the PSBT from hex
+  const psbt = bitcoin.Psbt.fromHex(psbtHex, { network: btcNetwork })
+  
+  console.log(`   Inputs: ${psbt.inputCount}, Outputs: ${psbt.txOutputs.length}`)
+  
+  // Sign all inputs
+  for (let i = 0; i < psbt.inputCount; i++) {
+    try {
+      psbt.signInput(i, keyPair)
+      console.log(`   ✓ Signed input ${i}`)
+    } catch (err) {
+      console.log(`   ⚠️ Could not sign input ${i}: ${err}`)
+    }
+  }
+  
+  // Finalize all inputs
+  psbt.finalizeAllInputs()
+  
+  // Extract and broadcast
+  const tx = psbt.extractTransaction()
+  const txHex = tx.toHex()
+  const txid = tx.getId()
+  
+  console.log(`   Tx ID: ${txid}`)
+  console.log(`   Broadcasting...`)
+  
+  const broadcastedTxid = await broadcastTx(txHex)
+  console.log(`   ✅ Broadcasted: ${broadcastedTxid}`)
+  
+  return broadcastedTxid
 }

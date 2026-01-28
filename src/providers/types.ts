@@ -19,6 +19,7 @@ export interface SwapResult {
   inputAmount: string
   outputAmount: string  // expected
   timestamp: number
+  error?: string  // Optional error message for failed/skipped swaps
 }
 
 export interface SettlementResult {

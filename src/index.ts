@@ -29,49 +29,79 @@ const PROVIDERS = {
 const args = process.argv.slice(2)
 const EXECUTE_SWAPS = args.includes('--execute') ? true : args.includes('--no-execute') ? false : DEFAULT_EXECUTE_SWAPS
 
+// Note: Delays between swaps removed - Relay provider now handles UTXO conflicts
+// with automatic retry and fresh quote fetching
+
+// Execute a single swap for a provider
+async function executeProviderSwap(
+  provider: { name: string; getQuote: (swap: SwapParams) => Promise<{ quote: { outputAmount: string }; execute: () => Promise<{ swapId?: string }> }> },
+  swap: SwapParams,
+  prices: Awaited<ReturnType<typeof getTokenPrices>>
+) {
+  const { quote, execute } = await provider.getQuote(swap)
+  console.log(`\n[${provider.name}] Quote: ${swap.inputAmount} ${colorToken(swap.inputToken)} -> ${quote.outputAmount} ${colorToken(swap.outputToken)}`)
+  logQuote(quote as Parameters<typeof logQuote>[0], prices)
+  
+  if (EXECUTE_SWAPS) {
+    const result = await execute()
+    logSwap(result as Parameters<typeof logSwap>[0], prices)
+    if (result.swapId) trackSwap(result as Parameters<typeof trackSwap>[0])
+    return true // executed
+  }
+  return false // quote only
+}
+
 // main quoting/swapping function
 async function executeSwaps(swaps: SwapParams[]) {
-  const direction = swaps[0]?.inputToken === 'BTC' ? `${colorToken('BTC')} -> ${colorToken('EVM')}` : `${colorToken('EVM')} -> ${colorToken('BTC')}`
+  const isBtcToEvm = swaps[0]?.inputToken === 'BTC'
+  const direction = isBtcToEvm ? `${colorToken('BTC')} -> ${colorToken('EVM')}` : `${colorToken('EVM')} -> ${colorToken('BTC')}`
   console.log(`\n${'='.repeat(50)}\n${direction} | ${new Date().toISOString()}\n${'='.repeat(50)}`)
 
   // fetch current token prices
   const prices = await getTokenPrices()
 
+  // For BTC→EVM swaps: must be sequential quote+execute to avoid UTXO conflicts
+  // Relay constructs PSBTs at quote time, so we need fresh quotes after each execution
+  if (isBtcToEvm && EXECUTE_SWAPS) {
+    console.log(`\n📋 BTC→EVM: Using sequential quote+execute (UTXO safety)`)
+    
+    for (const swap of swaps) {
+      // ---------------------------------- RIFT (sequential) --------------------------------------
+      if (PROVIDERS.rift) {
+        try {
+          await executeProviderSwap(rift as Parameters<typeof executeProviderSwap>[0], swap, prices)
+        } catch (err) {
+          console.error(`  ❌ Rift Error: ${err instanceof Error ? err.message : err}`)
+        }
+      }
+
+      // ---------------------------------- RELAY (sequential) --------------------------------------
+      if (PROVIDERS.relay) {
+        try {
+          await executeProviderSwap(relay as Parameters<typeof executeProviderSwap>[0], swap, prices)
+        } catch (err) {
+          console.error(`  ❌ Relay Error: ${err instanceof Error ? err.message : err}`)
+        }
+      }
+    }
+    return
+  }
+
+  // For EVM→BTC swaps (or quote-only mode): can batch quotes since no UTXO conflict on EVM side
   for (const swap of swaps) {
     // ---------------------------------- RIFT --------------------------------------
     if (PROVIDERS.rift) {
       try {
-        const { quote, execute } = await rift.getQuote(swap)
-        console.log(`\n[${rift.name}] Quote: ${swap.inputAmount} ${colorToken(swap.inputToken)} -> ${quote.outputAmount} ${colorToken(swap.outputToken)}`)
-        logQuote(quote, prices)
-
-        if (EXECUTE_SWAPS) {
-          const result = await execute()
-          logSwap(result, prices)
-
-          // Track swap for settlement in background (non-blocking)
-          if (result.swapId) {
-            trackSwap(result)
-          }
-        }
+        await executeProviderSwap(rift as Parameters<typeof executeProviderSwap>[0], swap, prices)
       } catch (err) {
         console.error(`  ❌ Rift Error: ${err instanceof Error ? err.message : err}`)
       }
     }
 
-    
     // ---------------------------------- RELAY --------------------------------------
     if (PROVIDERS.relay) {
       try {
-        const { quote, execute } = await relay.getQuote(swap)
-        console.log(`\n[${relay.name}] Quote: ${swap.inputAmount} ${colorToken(swap.inputToken)} -> ${quote.outputAmount} ${colorToken(swap.outputToken)}`)
-        logQuote(quote, prices)
-        
-        if (EXECUTE_SWAPS) {
-          const result = await execute()
-          logSwap(result, prices)
-          if (result.swapId) trackSwap(result)
-        }
+        await executeProviderSwap(relay as Parameters<typeof executeProviderSwap>[0], swap, prices)
       } catch (err) {
         console.error(`  ❌ Relay Error: ${err instanceof Error ? err.message : err}`)
       }

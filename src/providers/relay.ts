@@ -4,6 +4,7 @@ import {
   EVM_ADDRESS,
   BTC_ADDRESS,
   sendBitcoin,
+  signAndBroadcastPsbt,
 } from '../account.js'
 import {
   type Quote,
@@ -325,77 +326,183 @@ export const relay = {
       }
     }
 
-    // BTC→EVM: Send BTC to deposit address from quote
-    async function executeBtcToEvm(): Promise<SwapResult> {
-      // Extract deposit address from quote steps
-      const steps = (quoteResponse as { steps?: Array<{ items?: Array<{ data?: { to?: string } }> }> }).steps
-      let depositAddress: string | null = null
-      
-      // Look for BTC deposit address in steps
-      if (steps) {
-        for (const step of steps) {
-          for (const item of step.items || []) {
-            // The deposit address should be a BTC address (starts with bc1, 1, or 3)
-            const to = item.data?.to
-            if (to && (to.startsWith('bc1') || to.startsWith('1') || to.startsWith('3'))) {
-              depositAddress = to
-              break
-            }
-          }
-          if (depositAddress) break
-        }
-      }
-      
-      // Also check details for deposit address
-      if (!depositAddress) {
-        const details = (quoteResponse as { details?: { depositAddress?: string } }).details
-        depositAddress = details?.depositAddress || null
-      }
-      
-      if (!depositAddress) {
-        // Log the quote structure to debug
-        console.log(`   ⚠️ Could not find BTC deposit address in quote`)
-        console.log(`   Quote keys: ${Object.keys(quoteResponse).join(', ')}`)
-        const qr = quoteResponse as Record<string, unknown>
-        if (qr.steps) {
-          console.log(`   Steps: ${JSON.stringify(qr.steps, null, 2).slice(0, 500)}...`)
-        }
-        throw new Error('Relay: Could not find BTC deposit address in quote')
-      }
-      
-      console.log(`   📍 BTC Deposit Address: ${depositAddress}`)
-      
-      // Send BTC to the deposit address
-      const amountSats = BigInt(amount)
-      console.log(`   📤 Sending ${amountSats} sats to ${depositAddress}...`)
-      
-      const btcTxHash = await sendBitcoin(depositAddress, amountSats)
-      
-      console.log(`✅ Relay BTC deposit sent`)
-      console.log(`   BTC Tx: ${btcTxHash}`)
-      console.log(`   https://mempool.space/tx/${btcTxHash}`)
-      console.log(`   Waiting for EVM payout...`)
-      
-      // Store for settlement tracking
-      pendingSwaps.set(btcTxHash, {
-        status: 'pending',
-        txHashes: [btcTxHash],
-        details: null,
-        btcPayoutTxHash: btcTxHash,
-        ethDepositTxHash: null,
+    // Helper to get fresh quote from Relay
+    async function getFreshQuote() {
+      const freshQuoteResponse = await client.actions.getQuote({
+        chainId: fromToken.chainId,
+        toChainId: toToken.chainId,
+        currency: fromToken.address,
+        toCurrency: toToken.address,
+        amount,
+        tradeType: 'EXACT_INPUT',
+        user,
+        recipient,
       })
-      
-      return {
-        provider: 'Relay',
-        success: true,
-        swapId: btcTxHash,
-        txHash: btcTxHash,
-        inputToken,
-        outputToken,
-        inputAmount,
-        outputAmount,
-        timestamp: Date.now(),
+      return freshQuoteResponse
+    }
+
+    // Helper to extract PSBT from quote response
+    function extractPsbtFromQuote(qr: unknown): string | null {
+      const steps = (qr as { steps?: Array<{ items?: Array<{ data?: { psbt?: string } }> }> }).steps
+      if (!steps) return null
+      for (const step of steps) {
+        for (const item of step.items || []) {
+          if (item.data?.psbt) return item.data.psbt
+        }
       }
+      return null
+    }
+
+    // BTC→EVM: Sign and broadcast the PSBT from Relay (with retry on UTXO conflict)
+    async function executeBtcToEvm(): Promise<SwapResult> {
+      const MAX_RETRIES = 100
+      const RETRY_DELAY_MS = 5000 // 5 seconds between retries
+      
+      let currentQuoteResponse = quoteResponse
+      let lastError: Error | null = null
+      
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        // Extract PSBT from current quote
+        const steps = (currentQuoteResponse as { steps?: Array<{ items?: Array<{ data?: { psbt?: string; to?: string } }> }> }).steps
+        let psbtHex: string | null = null
+        let depositAddress: string | null = null
+        
+        // Look for PSBT or deposit address in steps
+        if (steps) {
+          for (const step of steps) {
+            for (const item of step.items || []) {
+              if (item.data?.psbt) {
+                psbtHex = item.data.psbt
+                break
+              }
+              const to = item.data?.to
+              if (to && (to.startsWith('bc1') || to.startsWith('1') || to.startsWith('3'))) {
+                depositAddress = to
+              }
+            }
+            if (psbtHex) break
+          }
+        }
+        
+        // If we have a PSBT, sign and broadcast it
+        if (psbtHex) {
+          if (attempt > 1) {
+            console.log(`   🔄 Retry ${attempt}/${MAX_RETRIES}: Got fresh quote with updated UTXOs`)
+          }
+          console.log(`   📝 Found PSBT from Relay, signing...`)
+          
+          try {
+            const btcTxHash = await signAndBroadcastPsbt(psbtHex)
+            
+            console.log(`✅ Relay BTC transaction signed and broadcast`)
+            console.log(`   BTC Tx: ${btcTxHash}`)
+            console.log(`   https://mempool.space/tx/${btcTxHash}`)
+            console.log(`   Waiting for EVM payout...`)
+            
+            // Store for settlement tracking with the relay request ID
+            const relayRequestId = (currentQuoteResponse as { steps?: Array<{ requestId?: string }> }).steps?.[0]?.requestId || null
+            
+            pendingSwaps.set(btcTxHash, {
+              status: 'pending',
+              txHashes: [btcTxHash],
+              details: null,
+              btcPayoutTxHash: btcTxHash,
+              ethDepositTxHash: null,
+              relayRequestId,
+            })
+            
+            // Get updated output amount from fresh quote
+            const freshOutputAmount = (currentQuoteResponse as { details?: { currencyOut?: { amount?: string } } }).details?.currencyOut?.amount || outputAmount
+            
+            return {
+              provider: 'Relay',
+              success: true,
+              swapId: btcTxHash,
+              txHash: btcTxHash,
+              inputToken,
+              outputToken,
+              inputAmount,
+              outputAmount: freshOutputAmount,
+              timestamp: Date.now(),
+            }
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err)
+            lastError = err instanceof Error ? err : new Error(errMsg)
+            
+            // Check for UTXO conflict or RBF errors
+            if (errMsg.includes('UTXO conflict') || errMsg.includes('rejecting replacement') || errMsg.includes('insufficient fee')) {
+              if (attempt < MAX_RETRIES) {
+                console.log(`   ⚠️ UTXO conflict detected, waiting ${RETRY_DELAY_MS/1000}s for mempool to update...`)
+                await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS))
+                
+                // Get fresh quote with updated UTXO state
+                console.log(`   🔄 Getting fresh quote from Relay...`)
+                try {
+                  currentQuoteResponse = await getFreshQuote()
+                  continue // Retry with new quote
+                } catch (quoteErr) {
+                  console.log(`   ❌ Failed to get fresh quote: ${quoteErr}`)
+                  throw err // Throw original error
+                }
+              } else {
+                console.log(`   ❌ UTXO conflict after ${MAX_RETRIES} attempts`)
+                throw new Error(`UTXO conflict persisted after ${MAX_RETRIES} retries`)
+              }
+            }
+            
+            // Re-throw other errors immediately
+            throw err
+          }
+        }
+        
+        // Fallback: deposit address method (no retry needed)
+        if (!depositAddress) {
+          const details = (currentQuoteResponse as { details?: { depositAddress?: string } }).details
+          depositAddress = details?.depositAddress || null
+        }
+        
+        if (depositAddress) {
+          console.log(`   📍 BTC Deposit Address: ${depositAddress}`)
+          
+          const amountSats = BigInt(amount)
+          console.log(`   📤 Sending ${amountSats} sats to ${depositAddress}...`)
+          
+          const btcTxHash = await sendBitcoin(depositAddress, amountSats)
+          
+          console.log(`✅ Relay BTC deposit sent`)
+          console.log(`   BTC Tx: ${btcTxHash}`)
+          console.log(`   https://mempool.space/tx/${btcTxHash}`)
+          console.log(`   Waiting for EVM payout...`)
+          
+          pendingSwaps.set(btcTxHash, {
+            status: 'pending',
+            txHashes: [btcTxHash],
+            details: null,
+            btcPayoutTxHash: btcTxHash,
+            ethDepositTxHash: null,
+          })
+          
+          return {
+            provider: 'Relay',
+            success: true,
+            swapId: btcTxHash,
+            txHash: btcTxHash,
+            inputToken,
+            outputToken,
+            inputAmount,
+            outputAmount,
+            timestamp: Date.now(),
+          }
+        }
+        
+        // No PSBT or deposit address found
+        break
+      }
+      
+      // If we get here, no valid execution method was found
+      console.log(`   ⚠️ Could not find PSBT or deposit address in quote`)
+      console.log(`   Quote keys: ${Object.keys(quoteResponse).join(', ')}`)
+      throw new Error('Relay: Could not find PSBT or deposit address in quote')
     }
 
     return { quote: quoteResult, execute }
