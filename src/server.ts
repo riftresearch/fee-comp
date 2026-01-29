@@ -3,7 +3,7 @@ import { readFileSync, existsSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { getBalances, BTC_ADDRESS, EVM_ADDRESS } from './account.js'
 
-const CSV_HEADER = 'timestamp,type,provider,inputToken,outputToken,inputAmount,outputAmount,swapId,status,payoutTxHash,actualOutputAmount,btcPrice,cbbtcPrice,usdcPrice,ethPrice'
+const CSV_HEADER = 'timestamp,type,provider,inputToken,outputToken,inputAmount,outputAmount,swapId,status,payoutTxHash,actualOutputAmount,btcPrice,cbbtcPrice,usdcPrice,ethPrice,relayRequestId'
 
 const PORT = 3457
 
@@ -926,9 +926,9 @@ export function startServer() {
         <thead>
           <tr>
             <th>Time</th>
+            <th>Pair</th>
             <th>Type</th>
             <th>Provider</th>
-            <th>Pair</th>
             <th>Input</th>
             <th>Output</th>
             <th>Status</th>
@@ -985,12 +985,23 @@ export function startServer() {
         
         // Find matching quote (same tokens, within 2 minutes before the swap)
         const swapTime = new Date(swap.timestamp).getTime()
-        const matchingQuote = quotes.find(q => 
-          q.inputToken === swap.inputToken && 
-          q.outputToken === swap.outputToken &&
-          Math.abs(new Date(q.timestamp).getTime() - swapTime) < 120000 &&
-          new Date(q.timestamp).getTime() <= swapTime
-        )
+        const matchingQuote = quotes.find(q => {
+          const quoteTime = new Date(q.timestamp).getTime()
+          const timeDiff = swapTime - quoteTime
+          const matches = q.inputToken === swap.inputToken && 
+            q.outputToken === swap.outputToken &&
+            timeDiff >= 0 && timeDiff < 120000
+          // Debug log for CBBTC swaps
+          if (swap.inputToken === 'CBBTC' || swap.outputToken === 'CBBTC') {
+            console.log('Quote match check:', { 
+              swapPair: swap.inputToken + '->' + swap.outputToken,
+              quotePair: q.inputToken + '->' + q.outputToken, 
+              timeDiff: timeDiff/1000 + 's',
+              matches 
+            })
+          }
+          return matches
+        })
         
         // Find matching settlement
         const matchingSettlement = settlements.find(s => s.swapId === swap.swapId)
@@ -1376,9 +1387,9 @@ export function startServer() {
           return \`
             <tr onclick="showDetails(\${realIdx})">
               <td style="color: var(--text-muted)">\${time}</td>
+              <td class="pair">\${row.inputToken}<span class="pair-arrow">→</span>\${row.outputToken}</td>
               <td><span class="badge \${badgeClass}">\${row.type}</span></td>
               <td><span class="provider-badge">⚡ \${row.provider}</span></td>
-              <td class="pair">\${row.inputToken}<span class="pair-arrow">→</span>\${row.outputToken}</td>
               <td class="amount">\${row.inputAmount}</td>
               <td class="amount">\${row.outputAmount || '-'}</td>
               <td><span class="badge \${status === 'completed' ? 'badge-settlement' : 'badge-quote'}">\${status}</span></td>

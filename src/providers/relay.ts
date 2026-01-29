@@ -523,7 +523,7 @@ export const relay = {
       }
       
       const data = await response.json() as any
-      console.log(`   📡 v3 Response:`, JSON.stringify(data))
+      console.log(`   📡 v3 Status: ${data.status}${data.details ? ` (${data.details})` : ''}`)
       
       // v3 API returns { status: "success" | "pending" | "unknown", ... }
       if (!data.status || data.status === 'unknown') {
