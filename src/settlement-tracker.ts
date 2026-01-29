@@ -1,5 +1,6 @@
 import { rift } from './providers/rift.js'
 import { relay } from './providers/relay.js'
+import { thorchain } from './providers/thorchain.js'
 import { logSettlement } from './csv.js'
 import { type SwapResult, type SettlementResult, colorPair } from './providers/types.js'
 import { getTokenPrices } from './prices.js'
@@ -11,6 +12,7 @@ const providerCheckers: Record<string, {
 }> = {
   Rift: rift,
   Relay: relay,
+  Thorchain: thorchain,
 }
 
 // Pending swaps waiting for settlement

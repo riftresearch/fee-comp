@@ -1273,6 +1273,28 @@ export function startServer() {
             <span class="modal-value"><a href="https://relay.link/transaction/\${journey.relayRequestId}" target="_blank">View on Relay</a>\${copyBtn(journey.relayRequestId, 'Request ID')}</span>
           </div>
           \` : ''}
+          \${journey.provider === 'Thorchain' && journey.swap?.swapId ? (() => {
+            const thorTxId = journey.swap.swapId.replace(/^0x/i, '').toUpperCase();
+            const isBtcInput = journey.inputToken === 'BTC';
+            const depositExplorer = isBtcInput 
+              ? \`https://mempool.space/tx/\${journey.swap.swapId}\`
+              : \`https://etherscan.io/tx/\${journey.swap.swapId}\`;
+            return \`
+          <div class="modal-row">
+            <span class="modal-label">\${isBtcInput ? 'BTC' : 'ETH'} Deposit Tx</span>
+            <span class="modal-value"><a href="\${depositExplorer}" target="_blank">\${journey.swap.swapId.slice(0, 16)}...</a>\${copyBtn(journey.swap.swapId, 'Deposit Tx')}</span>
+          </div>
+          <div class="modal-row">
+            <span class="modal-label">THORChain Tx</span>
+            <span class="modal-value">
+              <a href="https://viewblock.io/thorchain/tx/\${thorTxId}" target="_blank">ViewBlock</a>
+              &nbsp;|&nbsp;
+              <a href="https://track.ninerealms.com/\${thorTxId}" target="_blank">9R Tracker</a>
+              \${copyBtn(thorTxId, 'Tx ID')}
+            </span>
+          </div>
+          \`;
+          })() : ''}
           \${journey.settlement?.payoutTxHash ? \`
           <div class="modal-row">
             <span class="modal-label">\${isBtcOutput ? 'BTC Payout Tx' : 'Payout Tx'}</span>

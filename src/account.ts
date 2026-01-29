@@ -882,6 +882,200 @@ export async function sendBitcoin(
   }
 }
 
+// THORChain dust threshold for BTC (minimum amount to process swap)
+const THORCHAIN_BTC_DUST_THRESHOLD = 10000n // 10k sats
+
+// Send Bitcoin with OP_RETURN memo (for THORChain swaps)
+// Output order is critical for THORChain:
+//   VOUT0: Asgard vault (recipient)
+//   VOUT1: Change back to sender (VIN0) - THORChain identifies user by VIN0 for refunds
+//   VOUT2: OP_RETURN with memo
+export async function sendBitcoinWithMemo(
+  recipient: string,
+  amountSats: bigint,
+  memo: string,
+  feeTier: FeeTier = 'normal'
+): Promise<string> {
+  console.log(`📤 BTC send with memo: ${amountSats} sats to ${recipient}`)
+  console.log(`   Memo: ${memo}`)
+
+  if (!btcPrivateKey) {
+    throw new Error('BTC_PRIVATE_KEY not set')
+  }
+
+  // THORChain requires swap amount to exceed dust threshold (10k sats for BTC)
+  if (amountSats <= THORCHAIN_BTC_DUST_THRESHOLD) {
+    throw new Error(`Amount ${amountSats} sats is below THORChain dust threshold (${THORCHAIN_BTC_DUST_THRESHOLD} sats)`)
+  }
+
+  // Validate memo length (BTC OP_RETURN max is 80 bytes)
+  const memoBuffer = Buffer.from(memo, 'utf8')
+  if (memoBuffer.length > 80) {
+    throw new Error(`Memo too long: ${memoBuffer.length} bytes (max 80)`)
+  }
+
+  // Clean up expired UTXO reservations
+  cleanupExpiredReservations()
+
+  // Parse private key (WIF format)
+  const keyPair = ECPair.fromWIF(btcPrivateKey, btcNetwork)
+  
+  // Get our address from private key (p2wpkh - native segwit)
+  const { address: sourceAddress } = bitcoin.payments.p2wpkh({
+    pubkey: Buffer.from(keyPair.publicKey),
+    network: btcNetwork,
+  })
+  
+  if (!sourceAddress) throw new Error('Could not derive source address')
+  console.log(`   From: ${sourceAddress}`)
+
+  // Fetch UTXOs, pending spends, and recommended fees in parallel
+  const [allUtxos, pendingSpends, feeRates] = await Promise.all([
+    getUtxos(sourceAddress),
+    getPendingSpends(sourceAddress),
+    getRecommendedFees(),
+  ])
+  
+  // Filter out UTXOs that are pending or reserved
+  const availableUtxos = allUtxos.filter(u => {
+    const key = `${u.txid}:${u.vout}`
+    if (pendingSpends.has(key)) return false
+    if (isUtxoReserved(u)) return false
+    if (isUtxoSpentByUs(key).spent) return false
+    return true
+  })
+  
+  if (availableUtxos.length === 0) {
+    throw new Error(`No available UTXOs for ${sourceAddress}`)
+  }
+  
+  const totalAvailable = availableUtxos.reduce((s, u) => s + u.value, 0)
+  console.log(`   UTXOs: ${availableUtxos.length} available (${totalAvailable} sats total)`)
+
+  // Get dynamic fee rate based on tier
+  const feeRate = getFeeRateForTier(feeRates, feeTier)
+  console.log(`   Fee rate: ${feeRate} sat/vB (${feeTier})`)
+  
+  // Calculate vsize: ~10.5 overhead + 68 per input + 31 per p2wpkh output + OP_RETURN size
+  // OP_RETURN output: 1 (value) + 1-2 (script length) + 1 (OP_RETURN) + 1 (push) + memo length
+  const opReturnSize = 1 + 1 + 1 + 1 + memoBuffer.length + 8 // +8 for value (0 sats)
+  const calcVsize = (inputs: number, regularOutputs: number) => 
+    Math.ceil(10.5 + (68 * inputs) + (31 * regularOutputs) + opReturnSize)
+  
+  // Select UTXOs with proper fee calculation
+  let selectedUtxos: UTXO[] = []
+  let totalInput = 0
+  
+  // Sort UTXOs by value descending to minimize inputs needed
+  const sortedUtxos = [...availableUtxos].sort((a, b) => b.value - a.value)
+  
+  for (const utxo of sortedUtxos) {
+    selectedUtxos.push(utxo)
+    totalInput += utxo.value
+    
+    // 3 outputs: recipient, change, OP_RETURN (but OP_RETURN counted separately)
+    const estimatedVsize = calcVsize(selectedUtxos.length, 2)
+    const estimatedFee = feeRate * estimatedVsize
+    const totalNeeded = Number(amountSats) + estimatedFee
+    
+    if (totalInput >= totalNeeded) break
+  }
+  
+  // Final fee calculation
+  const vsize = calcVsize(selectedUtxos.length, 2)
+  const fee = Math.ceil(feeRate * vsize)
+
+  if (totalInput < Number(amountSats) + fee) {
+    throw new Error(`Insufficient funds: have ${totalInput}, need ${Number(amountSats) + fee}`)
+  }
+  
+  console.log(`   Inputs: ${selectedUtxos.length}, vsize: ~${vsize}, fee: ${fee} sats`)
+
+  // Reserve selected UTXOs to prevent concurrent transactions from using them
+  reserveUtxos(selectedUtxos)
+
+  try {
+    // Build transaction
+    const psbt = new bitcoin.Psbt({ network: btcNetwork })
+
+    // Add inputs
+    for (const utxo of selectedUtxos) {
+      psbt.addInput({
+        hash: utxo.txid,
+        index: utxo.vout,
+        witnessUtxo: {
+          script: bitcoin.payments.p2wpkh({
+            pubkey: Buffer.from(keyPair.publicKey),
+            network: btcNetwork,
+          }).output!,
+          value: BigInt(utxo.value),
+        },
+      })
+    }
+
+    // Output 1 (VOUT0): Asgard vault - MUST be first output
+    psbt.addOutput({
+      address: recipient,
+      value: amountSats,
+    })
+
+    // Output 2 (VOUT1): Change back to sender (VIN0 address)
+    // THORChain identifies user by VIN0 for refunds - change MUST go back to same address
+    const change = totalInput - Number(amountSats) - fee
+    if (change > 546) { // 546 = BTC network dust threshold
+      psbt.addOutput({
+        address: sourceAddress, // Same as VIN0
+        value: BigInt(change),
+      })
+    }
+
+    // Output 3 (VOUT2): OP_RETURN with memo - specifies swap intent
+    const opReturnScript = bitcoin.script.compile([
+      bitcoin.opcodes.OP_RETURN,
+      memoBuffer,
+    ])
+    psbt.addOutput({
+      script: opReturnScript,
+      value: 0n,
+    })
+
+    // Sign all inputs
+    for (let i = 0; i < selectedUtxos.length; i++) {
+      psbt.signInput(i, keyPair)
+    }
+
+    // Finalize and extract
+    psbt.finalizeAllInputs()
+    const tx = psbt.extractTransaction()
+    const txHex = tx.toHex()
+    const txid = tx.getId()
+
+    const actualVsize = tx.virtualSize()
+    const actualFeeRate = (fee / actualVsize).toFixed(1)
+    console.log(`   Tx ID: ${txid}`)
+    console.log(`   Fee: ${fee} sats (${actualFeeRate} sat/vB actual, ${actualVsize} vB)`)
+
+    // Broadcast
+    const broadcastedTxid = await broadcastTx(txHex)
+    console.log(`   ✅ Broadcasted: ${broadcastedTxid}`)
+
+    // Record spent UTXOs
+    recordSpentUtxos(selectedUtxos, broadcastedTxid)
+    
+    // Record change output if we have one
+    if (change > 546) {
+      // Change is output index 1 (after recipient)
+      recordPendingChange(broadcastedTxid, 1, change)
+    }
+    
+    return broadcastedTxid
+  } catch (err) {
+    // Release UTXOs on failure so they can be used by other transactions
+    releaseUtxos(selectedUtxos)
+    throw err
+  }
+}
+
 /**
  * Sign and broadcast a PSBT provided by an external service (like Relay)
  * The PSBT should already have the inputs and outputs defined

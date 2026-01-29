@@ -1,6 +1,6 @@
 import { logAccountConfig, initializeUtxoStateFromMempool } from './account.js'
 import { rift } from './providers/rift.js'
-// import { thorchain } from './providers/thorchain.js'
+import { thorchain, recoverPendingSwapsFromCSV as recoverThorchainSwaps } from './providers/thorchain.js'
 import { relay } from './providers/relay.js'
 import { type SwapParams, colorToken, colorPair } from './providers/types.js'
 import { logQuote, logSwap } from './csv.js'
@@ -21,8 +21,8 @@ import {
 // ============================================================================
 const PROVIDERS = {
   rift: false,
-  relay: true,
-  // thorchain: true,
+  relay: false,
+  thorchain: true,
 }
 
 // parse CLI args (--execute)
@@ -83,6 +83,15 @@ async function executeSwaps(swaps: SwapParams[]) {
           console.error(`  ❌ Relay Error: ${err instanceof Error ? err.message : err}`)
         }
       }
+
+      // ---------------------------------- THORCHAIN (sequential) --------------------------------------
+      if (PROVIDERS.thorchain && thorchain.supportsSwap(swap.inputToken, swap.outputToken)) {
+        try {
+          await executeProviderSwap(thorchain as Parameters<typeof executeProviderSwap>[0], swap, prices)
+        } catch (err) {
+          console.error(`  ❌ Thorchain Error: ${err instanceof Error ? err.message : err}`)
+        }
+      }
     }
     return
   }
@@ -107,24 +116,14 @@ async function executeSwaps(swaps: SwapParams[]) {
       }
     }
 
-
     // ---------------------------------- THORCHAIN --------------------------------------
-    // if (PROVIDERS.thorchain) {
-    //   try {
-    //     const { quote, execute } = await thorchain.getQuote(swap)
-    //     console.log(`\n[${thorchain.name}] Quote: ${swap.inputAmount} ${colorToken(swap.inputToken)} -> ${quote.outputAmount} ${colorToken(swap.outputToken)}`)
-    //     console.log(`  Fee: $${quote.feeUsd.toFixed(4)} (${quote.feePercent.toFixed(2)}%)`)
-    //     logQuote(quote, prices)
-    //
-    //     if (EXECUTE_SWAPS) {
-    //       const result = await execute()
-    //       logSwap(result, prices)
-    //       if (result.swapId) trackSwap(result)
-    //     }
-    //   } catch (err) {
-    //     console.error(`  ❌ Thorchain Error: ${err instanceof Error ? err.message : err}`)
-    //   }
-    // }
+    if (PROVIDERS.thorchain && thorchain.supportsSwap(swap.inputToken, swap.outputToken)) {
+      try {
+        await executeProviderSwap(thorchain as Parameters<typeof executeProviderSwap>[0], swap, prices)
+      } catch (err) {
+        console.error(`  ❌ Thorchain Error: ${err instanceof Error ? err.message : err}`)
+      }
+    }
   }
 }
 
@@ -155,6 +154,11 @@ async function main() {
     if (pendingTxCount > 0) {
       console.log(`   ⚠️ Found ${pendingTxCount} pending tx(s) - will use recovered state to avoid conflicts`)
       console.log('')
+    }
+    
+    // Recover pending THORChain swaps from CSV for settlement tracking
+    if (PROVIDERS.thorchain) {
+      recoverThorchainSwaps()
     }
   }
 
