@@ -20,6 +20,7 @@ export interface SwapResult {
   outputAmount: string  // expected
   timestamp: number
   error?: string  // Optional error message for failed/skipped swaps
+  relayRequestId?: string | null  // Relay-specific: request ID for tracking
 }
 
 export interface SettlementResult {

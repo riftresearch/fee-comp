@@ -1,4 +1,4 @@
-import { logAccountConfig } from './account.js'
+import { logAccountConfig, initializeUtxoStateFromMempool } from './account.js'
 import { rift } from './providers/rift.js'
 // import { thorchain } from './providers/thorchain.js'
 import { relay } from './providers/relay.js'
@@ -147,6 +147,15 @@ async function main() {
   // Start background settlement watcher
   if (EXECUTE_SWAPS) {
     startSettlementWatcher()
+    
+    // Initialize UTXO state from mempool (recovers state if restarted while txs pending)
+    console.log(`\n📊 Initializing UTXO state...`)
+    const { pendingTxCount, spentUtxoCount } = await initializeUtxoStateFromMempool()
+    
+    if (pendingTxCount > 0) {
+      console.log(`   ⚠️ Found ${pendingTxCount} pending tx(s) - will use recovered state to avoid conflicts`)
+      console.log('')
+    }
   }
 
   const startTime = Date.now()
@@ -169,10 +178,21 @@ async function main() {
 
   // track next swap time
   let nextSwapTime = Date.now() + TWO_HOURS_MS
+  let countdownPaused = false
 
-  // live countdown timer
+  // Export function to pause countdown while logging
+  ;(global as any).pauseCountdown = () => {
+    countdownPaused = true
+    process.stdout.write('\r' + ' '.repeat(60) + '\r') // Clear the line
+  }
+  ;(global as any).resumeCountdown = () => {
+    countdownPaused = false
+  }
+
+  // live countdown timer - only updates when not paused
   console.log('')
   const countdownInterval = setInterval(() => {
+    if (countdownPaused) return
     const remaining = nextSwapTime - Date.now()
     if (remaining <= 0) return
 
@@ -180,7 +200,7 @@ async function main() {
     const mins = Math.floor((remaining % (60 * 60 * 1000)) / (60 * 1000))
     const secs = Math.floor((remaining % (60 * 1000)) / 1000)
 
-    process.stdout.write(`\r⏳ Next: ${getNextDirection()} in ${hours}h ${mins}m ${secs}s   `)
+    process.stdout.write(`\r⏳ Next: ${getNextDirection()} in ${hours}h ${mins}m ${secs}s      `)
   }, 1000)
 
   // run the next set every 2 hours for 7 days

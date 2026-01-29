@@ -4,7 +4,7 @@ import type { Quote, SwapResult, SettlementResult } from './providers/types.js'
 import type { TokenPrices } from './prices.js'
 
 const CSV_FILE = join(process.cwd(), 'data.csv')
-const HEADER = 'timestamp,type,provider,inputToken,outputToken,inputAmount,outputAmount,swapId,status,payoutTxHash,actualOutputAmount,btcPrice,cbbtcPrice,usdcPrice,ethPrice'
+const HEADER = 'timestamp,type,provider,inputToken,outputToken,inputAmount,outputAmount,swapId,status,payoutTxHash,actualOutputAmount,btcPrice,cbbtcPrice,usdcPrice,ethPrice,relayRequestId'
 
 function ensureFile() {
   if (!existsSync(CSV_FILE)) {
@@ -30,6 +30,7 @@ export function logQuote(quote: Quote, prices: TokenPrices) {
     prices.cbbtc.toFixed(2),
     prices.usdc.toFixed(4),
     prices.eth.toFixed(2),
+    '',  // relayRequestId
   ].join(',')
   appendFileSync(CSV_FILE, row + '\n')
 }
@@ -52,6 +53,7 @@ export function logSwap(swap: SwapResult, prices: TokenPrices) {
     prices.cbbtc.toFixed(2),
     prices.usdc.toFixed(4),
     prices.eth.toFixed(2),
+    swap.relayRequestId || '',
   ].join(',')
   appendFileSync(CSV_FILE, row + '\n')
 }
@@ -74,6 +76,7 @@ export function logSettlement(settlement: SettlementResult, swap: SwapResult, pr
     prices.cbbtc.toFixed(2),
     prices.usdc.toFixed(4),
     prices.eth.toFixed(2),
+    swap.relayRequestId || '',
   ].join(',')
   appendFileSync(CSV_FILE, row + '\n')
 }

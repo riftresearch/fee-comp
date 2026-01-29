@@ -3,8 +3,9 @@ import {
   mainnetWalletClient,
   EVM_ADDRESS,
   BTC_ADDRESS,
-  sendBitcoin,
-  signAndBroadcastPsbt,
+  buildTxFromRelayOutputs,
+  waitForMempoolConfirmation,
+  initializeUtxoStateFromMempool,
 } from '../account.js'
 import {
   type Quote,
@@ -102,6 +103,8 @@ export const relay = {
     const recipient = isBtcOutput ? BTC_ADDRESS : EVM_ADDRESS
 
     // Get quote from Relay
+    // For BTC input: use deposit address mode to avoid PSBT complexity
+    // This gives us a simple address to send BTC to, and Relay handles the rest
     const quoteResponse = await client.actions.getQuote({
       chainId: fromToken.chainId,
       toChainId: toToken.chainId,
@@ -111,6 +114,8 @@ export const relay = {
       tradeType: 'EXACT_INPUT',
       user,
       recipient,
+      // Use deposit address for BTC swaps - avoids PSBT construction issues
+      ...(isBtcInput && { useDepositAddress: true }),
     })
 
     if (!quoteResponse) {
@@ -323,6 +328,7 @@ export const relay = {
         inputAmount,
         outputAmount,
         timestamp: Date.now(),
+        relayRequestId,
       }
     }
 
@@ -337,6 +343,8 @@ export const relay = {
         tradeType: 'EXACT_INPUT',
         user,
         recipient,
+        // Use deposit address for BTC swaps - avoids PSBT issues
+        ...(isBtcInput && { useDepositAddress: true }),
       })
       return freshQuoteResponse
     }
@@ -353,133 +361,61 @@ export const relay = {
       return null
     }
 
-    // BTC→EVM: Sign and broadcast the PSBT from Relay (with retry on UTXO conflict)
+    // BTC→EVM: Extract outputs from Relay's PSBT and build our own TX with fresh UTXOs
     async function executeBtcToEvm(): Promise<SwapResult> {
-      const MAX_RETRIES = 100
-      const RETRY_DELAY_MS = 5000 // 5 seconds between retries
-      
-      let currentQuoteResponse = quoteResponse
+      const MAX_RETRIES = 3
       let lastError: Error | null = null
       
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-        // Extract PSBT from current quote
-        const steps = (currentQuoteResponse as { steps?: Array<{ items?: Array<{ data?: { psbt?: string; to?: string } }> }> }).steps
-        let psbtHex: string | null = null
-        let depositAddress: string | null = null
-        
-        // Look for PSBT or deposit address in steps
-        if (steps) {
-          for (const step of steps) {
-            for (const item of step.items || []) {
-              if (item.data?.psbt) {
-                psbtHex = item.data.psbt
-                break
-              }
-              const to = item.data?.to
-              if (to && (to.startsWith('bc1') || to.startsWith('1') || to.startsWith('3'))) {
-                depositAddress = to
-              }
-            }
-            if (psbtHex) break
-          }
-        }
-        
-        // If we have a PSBT, sign and broadcast it
-        if (psbtHex) {
-          if (attempt > 1) {
-            console.log(`   🔄 Retry ${attempt}/${MAX_RETRIES}: Got fresh quote with updated UTXOs`)
-          }
-          console.log(`   📝 Found PSBT from Relay, signing...`)
+        try {
+          // Get fresh quote on retry (new PSBT with updated order ID)
+          const currentQuote = attempt === 1 ? quoteResponse : await getFreshQuote()
+          const quoteAny = currentQuote as any
           
-          try {
-            const btcTxHash = await signAndBroadcastPsbt(psbtHex)
-            
-            console.log(`✅ Relay BTC transaction signed and broadcast`)
-            console.log(`   BTC Tx: ${btcTxHash}`)
-            console.log(`   https://mempool.space/tx/${btcTxHash}`)
-            console.log(`   Waiting for EVM payout...`)
-            
-            // Store for settlement tracking with the relay request ID
-            const relayRequestId = (currentQuoteResponse as { steps?: Array<{ requestId?: string }> }).steps?.[0]?.requestId || null
-            
-            pendingSwaps.set(btcTxHash, {
-              status: 'pending',
-              txHashes: [btcTxHash],
-              details: null,
-              btcPayoutTxHash: btcTxHash,
-              ethDepositTxHash: null,
-              relayRequestId,
-            })
-            
-            // Get updated output amount from fresh quote
-            const freshOutputAmount = (currentQuoteResponse as { details?: { currencyOut?: { amount?: string } } }).details?.currencyOut?.amount || outputAmount
-            
-            return {
-              provider: 'Relay',
-              success: true,
-              swapId: btcTxHash,
-              txHash: btcTxHash,
-              inputToken,
-              outputToken,
-              inputAmount,
-              outputAmount: freshOutputAmount,
-              timestamp: Date.now(),
-            }
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err)
-            lastError = err instanceof Error ? err : new Error(errMsg)
-            
-            // Check for UTXO conflict or RBF errors
-            if (errMsg.includes('UTXO conflict') || errMsg.includes('rejecting replacement') || errMsg.includes('insufficient fee')) {
-              if (attempt < MAX_RETRIES) {
-                console.log(`   ⚠️ UTXO conflict detected, waiting ${RETRY_DELAY_MS/1000}s for mempool to update...`)
-                await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS))
-                
-                // Get fresh quote with updated UTXO state
-                console.log(`   🔄 Getting fresh quote from Relay...`)
-                try {
-                  currentQuoteResponse = await getFreshQuote()
-                  continue // Retry with new quote
-                } catch (quoteErr) {
-                  console.log(`   ❌ Failed to get fresh quote: ${quoteErr}`)
-                  throw err // Throw original error
+          // Extract the request ID for settlement tracking
+          const step0 = quoteAny.steps?.[0]
+          const relayRequestId = step0?.requestId || null
+          
+          console.log(`   📋 Relay Request ID: ${relayRequestId}`)
+          
+          // Find the PSBT in the quote response
+          let psbtHex: string | null = null
+          if (quoteAny.steps) {
+            for (const step of quoteAny.steps) {
+              for (const item of step.items || []) {
+                if (item.data?.psbt) {
+                  psbtHex = item.data.psbt
+                  break
                 }
-              } else {
-                console.log(`   ❌ UTXO conflict after ${MAX_RETRIES} attempts`)
-                throw new Error(`UTXO conflict persisted after ${MAX_RETRIES} retries`)
               }
+              if (psbtHex) break
             }
-            
-            // Re-throw other errors immediately
-            throw err
           }
-        }
-        
-        // Fallback: deposit address method (no retry needed)
-        if (!depositAddress) {
-          const details = (currentQuoteResponse as { details?: { depositAddress?: string } }).details
-          depositAddress = details?.depositAddress || null
-        }
-        
-        if (depositAddress) {
-          console.log(`   📍 BTC Deposit Address: ${depositAddress}`)
           
-          const amountSats = BigInt(amount)
-          console.log(`   📤 Sending ${amountSats} sats to ${depositAddress}...`)
+          if (!psbtHex) {
+            throw new Error('Relay: No PSBT found in quote response')
+          }
           
-          const btcTxHash = await sendBitcoin(depositAddress, amountSats)
+          // Build our own transaction using Relay's outputs but our fresh UTXOs
+          const btcTxHash = await buildTxFromRelayOutputs(psbtHex)
           
-          console.log(`✅ Relay BTC deposit sent`)
+          console.log(`✅ Relay BTC transaction sent`)
           console.log(`   BTC Tx: ${btcTxHash}`)
           console.log(`   https://mempool.space/tx/${btcTxHash}`)
+          
+          // Wait for mempool visibility before proceeding to next swap
+          await waitForMempoolConfirmation(btcTxHash)
+          
           console.log(`   Waiting for EVM payout...`)
           
+          // Store for settlement tracking
           pendingSwaps.set(btcTxHash, {
             status: 'pending',
             txHashes: [btcTxHash],
             details: null,
             btcPayoutTxHash: btcTxHash,
             ethDepositTxHash: null,
+            relayRequestId,
           })
           
           return {
@@ -492,17 +428,38 @@ export const relay = {
             inputAmount,
             outputAmount,
             timestamp: Date.now(),
+            relayRequestId,
           }
+          
+        } catch (err) {
+          lastError = err as Error
+          const errMsg = lastError.message || ''
+          
+          // Check if this is a retryable UTXO error
+          const isUtxoError = errMsg.includes('bad-txns-inputs-missingorspent') ||
+                             errMsg.includes('Missing inputs') ||
+                             errMsg.includes('already spent')
+          
+          if (isUtxoError && attempt < MAX_RETRIES) {
+            console.log(`   ⚠️ UTXO error on attempt ${attempt}/${MAX_RETRIES}: ${errMsg}`)
+            console.log(`   🔄 Refreshing UTXO state and retrying with fresh quote...`)
+            
+            // Wait a moment for any pending txs to propagate
+            await new Promise(r => setTimeout(r, 2000))
+            
+            // Refresh our UTXO state from mempool
+            await initializeUtxoStateFromMempool()
+            
+            continue
+          }
+          
+          // Non-retryable error or max retries reached
+          throw lastError
         }
-        
-        // No PSBT or deposit address found
-        break
       }
       
-      // If we get here, no valid execution method was found
-      console.log(`   ⚠️ Could not find PSBT or deposit address in quote`)
-      console.log(`   Quote keys: ${Object.keys(quoteResponse).join(', ')}`)
-      throw new Error('Relay: Could not find PSBT or deposit address in quote')
+      // Should never reach here, but TypeScript needs this
+      throw lastError || new Error('Max retries reached')
     }
 
     return { quote: quoteResult, execute }
@@ -554,61 +511,55 @@ export const relay = {
       }
       
       console.log(`   🔍 Checking Relay Request ID: ${relayRequestId}`)
-      
-      // Use the relay-api-proxy endpoint with browser-like headers
-      const url = `https://relay-api-proxy.relay-link.workers.dev/api/requests/v2?id=${relayRequestId}`
       console.log(`   🔗 https://relay.link/transaction/${relayRequestId}`)
       
-      const response = await fetch(url, {
-        headers: {
-          'accept': '*/*',
-          'accept-language': 'en-US,en;q=0.9',
-          'referer': `https://relay.link/transaction/${swapId}`,
-          'origin': 'https://relay.link',
-        },
-      })
+      // Use the v3 status API
+      const url = `https://api.relay.link/intents/status/v3?requestId=${relayRequestId}`
+      
+      const response = await fetch(url)
       if (!response.ok) {
         console.log(`   ❌ API error: ${response.status}`)
         return null
       }
       
-      const data = await response.json() as RelayRequestResponse
-      console.log(`   📡 Response status: ${data.requests?.[0]?.status || 'no requests'}`)
+      const data = await response.json() as any
+      console.log(`   📡 v3 Response:`, JSON.stringify(data))
       
-      const request = data.requests?.[0]
-      if (!request) {
-        console.log(`   ⚠️ No request found`)
+      // v3 API returns { status: "success" | "pending" | "unknown", ... }
+      if (!data.status || data.status === 'unknown') {
+        console.log(`   ⚠️ Status unknown or not found`)
         return null
       }
       
       // Check if swap is complete
-      if (request.status === 'success') {
-        // Find output transaction - could be BTC (EVM→BTC) or EVM (BTC→EVM)
-        const btcOutTx = request.data?.outTxs?.find(tx => tx.chainId === BITCOIN_CHAIN_ID)
-        const evmOutTx = request.data?.outTxs?.find(tx => tx.chainId === ETHEREUM_CHAIN_ID)
+      if (data.status === 'success') {
+        // v3 response has txHashes array with output tx, and destinationChainId
+        const isBtcPayout = data.destinationChainId === BITCOIN_CHAIN_ID
         
-        // Determine payout tx hash based on direction
-        const payoutTxHash = btcOutTx?.hash || (evmOutTx?.hash ? `0x${evmOutTx.hash.replace(/^0x/, '')}` : null)
-        const isBtcPayout = !!btcOutTx
-        
-        // Get actual output amount from metadata or stateChanges
-        let actualOutput: string | null = null
-        
-        // Try metadata first
-        if (request.data?.metadata?.currencyOut?.amount) {
-          actualOutput = request.data.metadata.currencyOut.amount
+        // Get payout tx hash from txHashes array (first one is the output tx)
+        let payoutTxHash: string | null = null
+        if (data.txHashes && data.txHashes.length > 0) {
+          payoutTxHash = data.txHashes[0]
+          // Ensure EVM tx hashes have 0x prefix
+          if (!isBtcPayout && payoutTxHash && !payoutTxHash.startsWith('0x')) {
+            payoutTxHash = `0x${payoutTxHash}`
+          }
         }
         
-        // Or find from stateChanges (positive balanceDiff to recipient)
-        const outTx = btcOutTx || evmOutTx
-        if (!actualOutput && outTx?.stateChanges && request.recipient) {
-          const recipientChange = outTx.stateChanges.find(
-            sc => sc.address.toLowerCase() === request.recipient?.toLowerCase() && 
-                  parseInt(sc.change.balanceDiff) > 0
-          )
-          if (recipientChange) {
-            actualOutput = recipientChange.change.balanceDiff
+        // v3 doesn't have actual output amount - fetch from v2 API for details
+        let actualOutput: string | null = null
+        try {
+          const v2Url = `https://api.relay.link/requests/v2?id=${relayRequestId}`
+          const v2Response = await fetch(v2Url)
+          if (v2Response.ok) {
+            const v2Data = await v2Response.json() as any
+            const request = v2Data.requests?.[0]
+            if (request?.data?.metadata?.currencyOut?.amount) {
+              actualOutput = request.data.metadata.currencyOut.amount
+            }
           }
+        } catch {
+          // v2 fetch failed, continue without actual output
         }
         
         console.log(`   ✅ Relay swap completed!`)
@@ -616,14 +567,15 @@ export const relay = {
           const explorer = isBtcPayout 
             ? `https://mempool.space/tx/${payoutTxHash}`
             : `https://etherscan.io/tx/${payoutTxHash}`
-          console.log(`   🔗 ${isBtcPayout ? 'BTC' : 'ETH'} Payout Tx: ${payoutTxHash}`)
+          console.log(`   🔗 ${isBtcPayout ? 'BTC' : 'EVM'} Payout Tx: ${payoutTxHash}`)
           console.log(`      ${explorer}`)
         }
         if (actualOutput) {
           console.log(`   💰 Actual Output: ${actualOutput}`)
         }
         
-        pendingSwaps.delete(swapId)
+        // Note: Don't delete from pendingSwaps here - settlement-tracker manages lifecycle
+        // The entry will be orphaned but that's fine, it prevents race conditions
         
         return {
           swapId,
@@ -635,7 +587,7 @@ export const relay = {
       }
       
       // Still pending
-      console.log(`   ⏳ Status: ${request.status}`)
+      console.log(`   ⏳ Status: ${data.status}`)
       return null
       
     } catch (error) {

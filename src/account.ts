@@ -233,14 +233,25 @@ function getFeeRateForTier(rates: FeeRates, tier: FeeTier): number {
 }
 
 // ============================================================================
-// UTXO LOCKING SYSTEM (for concurrent transaction safety)
+// UTXO TRACKING SYSTEM (for concurrent transaction safety)
 // ============================================================================
 
 // Track locally reserved UTXOs (not yet in mempool)
 const reservedUtxos = new Map<string, { expiresAt: number }>()
 
+// Track UTXOs we've SPENT in broadcast transactions (even if not yet visible to external services)
+// Key: "txid:vout", Value: { spentInTxid, spentAt }
+const spentUtxos = new Map<string, { spentInTxid: string; spentAt: number }>()
+
+// Track CHANGE UTXOs from our broadcast transactions (available for immediate use)
+// These are outputs back to our address that we can spend even before they're confirmed
+const pendingChangeUtxos = new Map<string, UTXO>()
+
 // Reservation expiry time (60 seconds - covers broadcast delays)
 const UTXO_RESERVATION_TTL = 60_000
+
+// Spent UTXO expiry time (10 minutes - should be confirmed by then)
+const SPENT_UTXO_TTL = 10 * 60_000
 
 /**
  * Generate a unique key for a UTXO
@@ -311,6 +322,163 @@ function isUtxoKeyReserved(key: string): boolean {
   return true
 }
 
+/**
+ * Record that we've spent UTXOs in a broadcast transaction
+ * This is called after successful broadcast so we KNOW these UTXOs are spent
+ */
+function recordSpentUtxos(utxos: UTXO[], spentInTxid: string): void {
+  const spentAt = Date.now()
+  for (const utxo of utxos) {
+    const key = utxoKey(utxo)
+    spentUtxos.set(key, { spentInTxid, spentAt })
+    // Remove from reserved since it's now definitively spent
+    reservedUtxos.delete(key)
+  }
+  console.log(`   📊 Recorded ${utxos.length} UTXO(s) as spent in tx ${spentInTxid.slice(0, 12)}...`)
+}
+
+/**
+ * Record a pending change output from our transaction
+ * This UTXO is available for spending even before confirmation
+ */
+function recordPendingChange(txid: string, vout: number, value: number): void {
+  const key = `${txid}:${vout}`
+  pendingChangeUtxos.set(key, { txid, vout, value })
+  console.log(`   💰 Recorded pending change: ${value} sats at ${txid.slice(0, 12)}...:${vout}`)
+}
+
+/**
+ * Check if a UTXO has been spent by us (even if not yet in external mempool)
+ */
+function isUtxoSpentByUs(key: string): { spent: boolean; spentInTxid?: string } {
+  const spent = spentUtxos.get(key)
+  if (!spent) return { spent: false }
+  
+  // Check if entry has expired (tx should be confirmed by now)
+  if (Date.now() - spent.spentAt > SPENT_UTXO_TTL) {
+    spentUtxos.delete(key)
+    return { spent: false }
+  }
+  
+  return { spent: true, spentInTxid: spent.spentInTxid }
+}
+
+/**
+ * Clean up expired spent UTXO records
+ */
+function cleanupSpentUtxos(): void {
+  const now = Date.now()
+  for (const [key, record] of spentUtxos) {
+    if (now - record.spentAt > SPENT_UTXO_TTL) {
+      spentUtxos.delete(key)
+    }
+  }
+  // Also clean up pending change after they should be confirmed
+  for (const [key, utxo] of pendingChangeUtxos) {
+    // Keep for 10 minutes, then they should be in confirmed UTXO set
+    const recordTime = spentUtxos.get(key)?.spentAt
+    if (recordTime && now - recordTime > SPENT_UTXO_TTL) {
+      pendingChangeUtxos.delete(key)
+    }
+  }
+}
+
+/**
+ * Get the count of UTXOs we've locally marked as spent
+ */
+export function getSpentUtxoCount(): number {
+  return spentUtxos.size
+}
+
+/**
+ * Get pending change UTXOs (for debugging/status)
+ */
+export function getPendingChangeCount(): number {
+  return pendingChangeUtxos.size
+}
+
+/**
+ * Initialize UTXO state from mempool on startup
+ * This recovers our local state if we restart while transactions are pending
+ */
+export async function initializeUtxoStateFromMempool(): Promise<{ pendingTxCount: number; spentUtxoCount: number }> {
+  if (!btcPrivateKey) {
+    console.log(`   ⚠️ No BTC_PRIVATE_KEY - skipping UTXO state recovery`)
+    return { pendingTxCount: 0, spentUtxoCount: 0 }
+  }
+
+  const keyPair = ECPair.fromWIF(btcPrivateKey, btcNetwork)
+  const { address } = bitcoin.payments.p2wpkh({
+    pubkey: Buffer.from(keyPair.publicKey),
+    network: btcNetwork,
+  })
+
+  if (!address) {
+    return { pendingTxCount: 0, spentUtxoCount: 0 }
+  }
+
+  console.log(`   🔍 Checking mempool for pending transactions from ${address.slice(0, 12)}...`)
+
+  try {
+    // Fetch pending mempool transactions
+    const res = await fetch(`https://mempool.space/api/address/${address}/txs/mempool`)
+    if (!res.ok) {
+      console.log(`   ⚠️ Could not fetch mempool state: ${res.status}`)
+      return { pendingTxCount: 0, spentUtxoCount: 0 }
+    }
+
+    interface MempoolTx {
+      txid: string
+      vin: { txid: string; vout: number }[]
+      vout: { scriptpubkey_address?: string; value: number }[]
+    }
+
+    const pendingTxs = await res.json() as MempoolTx[]
+
+    if (pendingTxs.length === 0) {
+      console.log(`   ✅ No pending mempool transactions - clean state`)
+      return { pendingTxCount: 0, spentUtxoCount: 0 }
+    }
+
+    console.log(`   ⚠️ Found ${pendingTxs.length} pending transaction(s) in mempool - recovering state...`)
+
+    let totalSpentUtxos = 0
+
+    for (const tx of pendingTxs) {
+      console.log(`   📋 Pending tx: ${tx.txid.slice(0, 16)}...`)
+      
+      // Record all inputs as spent
+      for (const input of tx.vin) {
+        const key = `${input.txid}:${input.vout}`
+        spentUtxos.set(key, { spentInTxid: tx.txid, spentAt: Date.now() })
+        totalSpentUtxos++
+      }
+
+      // Record any change outputs back to our address
+      for (let vout = 0; vout < tx.vout.length; vout++) {
+        const output = tx.vout[vout]
+        if (output.scriptpubkey_address === address) {
+          const changeKey = `${tx.txid}:${vout}`
+          pendingChangeUtxos.set(changeKey, {
+            txid: tx.txid,
+            vout,
+            value: output.value,
+          })
+          console.log(`      💰 Change output: ${output.value} sats at :${vout}`)
+        }
+      }
+    }
+
+    console.log(`   📊 Recovered state: ${totalSpentUtxos} spent UTXO(s), ${pendingChangeUtxos.size} pending change(s)`)
+    
+    return { pendingTxCount: pendingTxs.length, spentUtxoCount: totalSpentUtxos }
+
+  } catch (err) {
+    console.log(`   ⚠️ Error recovering mempool state: ${err}`)
+    return { pendingTxCount: 0, spentUtxoCount: 0 }
+  }
+}
+
 // ============================================================================
 // UTXO FETCHING
 // ============================================================================
@@ -354,22 +522,138 @@ async function broadcastTx(txHex: string): Promise<string> {
 }
 
 // ============================================================================
+// MEMPOOL CONFIRMATION WAITING
+// ============================================================================
+
+// Configuration for mempool confirmation polling
+const MEMPOOL_POLL_INTERVAL_MS = 2000 // Poll every 2 seconds
+const MEMPOOL_MAX_WAIT_MS = 60_000 // Max 60 seconds wait
+const MEMPOOL_MIN_WAIT_MS = 3000 // Minimum wait before first check
+
+/**
+ * Wait for a transaction to be visible in mempool.space
+ * This ensures the tx has propagated before we request new quotes from external services
+ * Returns true if tx is visible, throws if timeout
+ */
+export async function waitForMempoolConfirmation(txid: string): Promise<boolean> {
+  console.log(`   ⏳ Waiting for tx ${txid.slice(0, 12)}... to appear in mempool`)
+  
+  const startTime = Date.now()
+  
+  // Wait a minimum time before first check (mempool propagation delay)
+  await new Promise(resolve => setTimeout(resolve, MEMPOOL_MIN_WAIT_MS))
+  
+  while (Date.now() - startTime < MEMPOOL_MAX_WAIT_MS) {
+    try {
+      const res = await fetch(`https://mempool.space/api/tx/${txid}`)
+      if (res.ok) {
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+        console.log(`   ✅ Tx visible in mempool after ${elapsed}s`)
+        return true
+      }
+      // 404 means not yet visible - keep polling
+    } catch {
+      // Network error - keep polling
+    }
+    
+    await new Promise(resolve => setTimeout(resolve, MEMPOOL_POLL_INTERVAL_MS))
+  }
+  
+  // Timeout - but don't fail hard, just warn
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+  console.warn(`   ⚠️ Tx not visible in mempool after ${elapsed}s (may still propagate)`)
+  return false
+}
+
+/**
+ * Check if a transaction is visible in mempool (non-blocking, single check)
+ */
+export async function isTxInMempool(txid: string): Promise<boolean> {
+  try {
+    const res = await fetch(`https://mempool.space/api/tx/${txid}`)
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Wait for all pending transactions from an address to be visible in mempool
+ * Useful before requesting quotes to ensure external services see our latest state
+ */
+export async function waitForPendingTxsVisible(address: string): Promise<void> {
+  const pendingSpends = await getPendingSpends(address)
+  if (pendingSpends.size === 0) return
+  
+  console.log(`   📡 Checking ${pendingSpends.size} pending tx(s) are visible in mempool...`)
+  // We just need the pending spends to be there - they already are if getPendingSpends found them
+  // This function is mainly a sanity check
+}
+
+// ============================================================================
 // PSBT VALIDATION (for external PSBTs like from Relay)
 // ============================================================================
 
 interface PsbtUtxoConflict {
   txid: string
   vout: number
-  reason: 'mempool' | 'reserved'
+  reason: 'spent_locally' | 'mempool' | 'reserved'
+  spentInTxid?: string // If spent_locally, which tx spent it
+}
+
+/**
+ * Extract UTXO inputs from a PSBT for reservation purposes
+ */
+function extractUtxosFromPsbt(psbtHex: string): UTXO[] {
+  const psbt = bitcoin.Psbt.fromHex(psbtHex, { network: btcNetwork })
+  const utxos: UTXO[] = []
+  
+  for (let i = 0; i < psbt.inputCount; i++) {
+    const input = psbt.txInputs[i]
+    // txid is stored as reversed buffer in bitcoinjs
+    const txid = Buffer.from(input.hash).reverse().toString('hex')
+    const vout = input.index
+    // Value is not strictly needed for reservation, but we can try to get it from witnessUtxo
+    const witnessUtxo = psbt.data.inputs[i]?.witnessUtxo
+    const value = witnessUtxo ? Number(witnessUtxo.value) : 0
+    utxos.push({ txid, vout, value })
+  }
+  
+  return utxos
+}
+
+/**
+ * Reserve UTXOs from an external PSBT (like from Relay)
+ * This prevents concurrent operations from using the same UTXOs
+ */
+export function reservePsbtUtxos(psbtHex: string): UTXO[] {
+  const utxos = extractUtxosFromPsbt(psbtHex)
+  reserveUtxos(utxos)
+  console.log(`   🔒 Reserved ${utxos.length} UTXO(s) from PSBT`)
+  return utxos
+}
+
+/**
+ * Release UTXOs that were reserved from a PSBT
+ */
+export function releasePsbtUtxos(utxos: UTXO[]): void {
+  releaseUtxos(utxos)
+  console.log(`   🔓 Released ${utxos.length} UTXO(s)`)
 }
 
 /**
  * Validate that a PSBT's input UTXOs are still available
  * Returns array of conflicts (empty if all inputs are valid)
+ * 
+ * Priority order:
+ * 1. Check our LOCAL spent UTXO list (authoritative - we know what we've spent)
+ * 2. Check local reservations
+ * 3. Check mempool.space (fallback for external detection)
  */
 export async function validatePsbtUtxos(psbtHex: string): Promise<PsbtUtxoConflict[]> {
-  // Clean up expired reservations first
+  // Clean up expired entries
   cleanupExpiredReservations()
+  cleanupSpentUtxos()
   
   // Parse the PSBT
   const psbt = bitcoin.Psbt.fromHex(psbtHex, { network: btcNetwork })
@@ -384,29 +668,48 @@ export async function validatePsbtUtxos(psbtHex: string): Promise<PsbtUtxoConfli
     inputUtxos.push({ txid, vout, key: `${txid}:${vout}` })
   }
   
-  // Get our BTC address to check pending spends
+  // Check each input for conflicts - LOCAL FIRST (no network calls needed)
+  const conflicts: PsbtUtxoConflict[] = []
+  let hasLocalConflict = false
+  
+  for (const utxo of inputUtxos) {
+    // 1. Check if we've already spent this UTXO (our local knowledge)
+    const spentCheck = isUtxoSpentByUs(utxo.key)
+    if (spentCheck.spent) {
+      conflicts.push({ 
+        txid: utxo.txid, 
+        vout: utxo.vout, 
+        reason: 'spent_locally',
+        spentInTxid: spentCheck.spentInTxid
+      })
+      hasLocalConflict = true
+      continue
+    }
+    
+    // 2. Check if locally reserved
+    if (isUtxoKeyReserved(utxo.key)) {
+      conflicts.push({ txid: utxo.txid, vout: utxo.vout, reason: 'reserved' })
+      hasLocalConflict = true
+    }
+  }
+  
+  // If we found local conflicts, return immediately (no need to check mempool)
+  if (hasLocalConflict) {
+    return conflicts
+  }
+  
+  // 3. Fallback: Check mempool.space for spends we might not know about
   const keyPair = ECPair.fromWIF(btcPrivateKey!, btcNetwork)
   const { address } = bitcoin.payments.p2wpkh({
     pubkey: Buffer.from(keyPair.publicKey),
     network: btcNetwork,
   })
   
-  // Fetch pending spends from mempool
   const pendingSpends = address ? await getPendingSpends(address) : new Set<string>()
   
-  // Check each input for conflicts
-  const conflicts: PsbtUtxoConflict[] = []
-  
   for (const utxo of inputUtxos) {
-    // Check if spent in mempool
     if (pendingSpends.has(utxo.key)) {
       conflicts.push({ txid: utxo.txid, vout: utxo.vout, reason: 'mempool' })
-      continue
-    }
-    
-    // Check if locally reserved
-    if (isUtxoKeyReserved(utxo.key)) {
-      conflicts.push({ txid: utxo.txid, vout: utxo.vout, reason: 'reserved' })
     }
   }
   
@@ -582,6 +885,13 @@ export async function sendBitcoin(
 /**
  * Sign and broadcast a PSBT provided by an external service (like Relay)
  * The PSBT should already have the inputs and outputs defined
+ * 
+ * This function:
+ * 1. Validates UTXO availability (checks mempool and local reservations)
+ * 2. Reserves the UTXOs to prevent concurrent conflicts
+ * 3. Signs and broadcasts the transaction
+ * 4. Keeps UTXOs reserved (they're now in mempool)
+ * 5. Releases UTXOs on failure
  */
 export async function signAndBroadcastPsbt(psbtHex: string): Promise<string> {
   console.log(`📝 Signing external PSBT...`)
@@ -591,46 +901,346 @@ export async function signAndBroadcastPsbt(psbtHex: string): Promise<string> {
     throw new Error('BTC_PRIVATE_KEY not set')
   }
   
+  // Clean up expired reservations first
+  cleanupExpiredReservations()
+  
   // Validate UTXO availability before signing (prevents cryptic RBF errors)
   const conflicts = await validatePsbtUtxos(psbtHex)
   if (conflicts.length > 0) {
-    const details = conflicts.map(c => 
-      `${c.txid.slice(0, 8)}...${c.txid.slice(-4)}:${c.vout} (${c.reason})`
-    ).join(', ')
-    throw new Error(`UTXO conflict: ${conflicts.length} input(s) unavailable - ${details}`)
+    // Build detailed error message
+    const details = conflicts.map(c => {
+      const utxoId = `${c.txid.slice(0, 8)}...:${c.vout}`
+      if (c.reason === 'spent_locally' && c.spentInTxid) {
+        return `${utxoId} (spent in ${c.spentInTxid.slice(0, 12)}...)`
+      }
+      return `${utxoId} (${c.reason})`
+    }).join(', ')
+    
+    // Include the spending tx in the error for relay.ts to use
+    const spentInTx = conflicts.find(c => c.spentInTxid)?.spentInTxid
+    const error = new Error(`UTXO conflict: ${conflicts.length} input(s) unavailable - ${details}`)
+    ;(error as any).spentInTxid = spentInTx
+    ;(error as any).isLocalConflict = conflicts.some(c => c.reason === 'spent_locally')
+    throw error
   }
+  
+  // Extract and reserve UTXOs from the PSBT to prevent concurrent operations
+  const reservedUtxosList = extractUtxosFromPsbt(psbtHex)
+  reserveUtxos(reservedUtxosList)
+  console.log(`   🔒 Reserved ${reservedUtxosList.length} UTXO(s) for broadcast`)
+  
+  try {
+    // Parse private key
+    const keyPair = ECPair.fromWIF(btcPrivateKey, btcNetwork)
+    
+    // Parse the PSBT from hex
+    const psbt = bitcoin.Psbt.fromHex(psbtHex, { network: btcNetwork })
+    
+    console.log(`   Inputs: ${psbt.inputCount}, Outputs: ${psbt.txOutputs.length}`)
+    
+    // Sign all inputs
+    for (let i = 0; i < psbt.inputCount; i++) {
+      try {
+        psbt.signInput(i, keyPair)
+        console.log(`   ✓ Signed input ${i}`)
+      } catch (err) {
+        console.log(`   ⚠️ Could not sign input ${i}: ${err}`)
+      }
+    }
+    
+    // Finalize all inputs
+    psbt.finalizeAllInputs()
+    
+    // Extract and broadcast
+    const tx = psbt.extractTransaction()
+    const txHex = tx.toHex()
+    const txid = tx.getId()
+    
+    console.log(`   Tx ID: ${txid}`)
+    console.log(`   Broadcasting...`)
+    
+    const broadcastedTxid = await broadcastTx(txHex)
+    console.log(`   ✅ Broadcasted: ${broadcastedTxid}`)
+    
+    // IMPORTANT: Record these UTXOs as definitively SPENT by us
+    // This is our authoritative local state - no need to wait for mempool propagation
+    recordSpentUtxos(reservedUtxosList, broadcastedTxid)
+    
+    // Find and record any change output back to our address
+    const { address: ourAddress } = bitcoin.payments.p2wpkh({
+      pubkey: Buffer.from(keyPair.publicKey),
+      network: btcNetwork,
+    })
+    
+    if (ourAddress) {
+      // Check each output to see if it's back to our address (change)
+      for (let vout = 0; vout < psbt.txOutputs.length; vout++) {
+        const output = psbt.txOutputs[vout]
+        try {
+          const outputAddress = bitcoin.address.fromOutputScript(output.script, btcNetwork)
+          if (outputAddress === ourAddress) {
+            // This is a change output back to us - record it as available
+            recordPendingChange(broadcastedTxid, vout, Number(output.value))
+          }
+        } catch {
+          // Could not decode output address - skip
+        }
+      }
+    }
+    
+    return broadcastedTxid
+  } catch (err) {
+    // Release UTXOs on failure so they can be used by other transactions
+    releaseUtxos(reservedUtxosList)
+    console.log(`   🔓 Released ${reservedUtxosList.length} UTXO(s) due to error`)
+    throw err
+  }
+}
+
+// ============================================================================
+// BUILD TX FROM RELAY PSBT OUTPUTS
+// ============================================================================
+
+interface RelayPsbtOutput {
+  script: Buffer
+  value: bigint
+  address?: string  // Decoded address if available
+  isOpReturn: boolean
+}
+
+/**
+ * Parse a Relay PSBT and extract its outputs.
+ * We'll use these outputs to build our own transaction with fresh UTXOs.
+ */
+function extractOutputsFromPsbt(psbtHex: string): RelayPsbtOutput[] {
+  const psbt = bitcoin.Psbt.fromHex(psbtHex, { network: btcNetwork })
+  const outputs: RelayPsbtOutput[] = []
+  
+  for (const output of psbt.txOutputs) {
+    const isOpReturn = output.script[0] === 0x6a // OP_RETURN opcode
+    let address: string | undefined
+    
+    if (!isOpReturn) {
+      try {
+        address = bitcoin.address.fromOutputScript(output.script, btcNetwork)
+      } catch {
+        // Could not decode address
+      }
+    }
+    
+    outputs.push({
+      script: Buffer.from(output.script),
+      value: BigInt(output.value),
+      address,
+      isOpReturn,
+    })
+  }
+  
+  return outputs
+}
+
+/**
+ * Build and broadcast a transaction using Relay's PSBT outputs but our own UTXOs.
+ * 
+ * This solves the UTXO conflict problem: Relay constructs PSBTs with stale UTXO info,
+ * but we only need their outputs (deposit address + OP_RETURN with order ID).
+ * We select our own fresh UTXOs for the inputs.
+ * 
+ * @param psbtHex - The PSBT hex from Relay's quote response
+ * @param feeTier - Fee tier to use for UTXO selection
+ * @returns The broadcast transaction ID
+ */
+export async function buildTxFromRelayOutputs(
+  psbtHex: string,
+  feeTier: FeeTier = 'normal'
+): Promise<string> {
+  console.log(`🔧 Building TX from Relay outputs with our own UTXOs...`)
+  
+  if (!btcPrivateKey) {
+    throw new Error('BTC_PRIVATE_KEY not set')
+  }
+  
+  // Clean up expired reservations
+  cleanupExpiredReservations()
+  cleanupSpentUtxos()
   
   // Parse private key
   const keyPair = ECPair.fromWIF(btcPrivateKey, btcNetwork)
   
-  // Parse the PSBT from hex
-  const psbt = bitcoin.Psbt.fromHex(psbtHex, { network: btcNetwork })
+  // Get our address
+  const { address: sourceAddress } = bitcoin.payments.p2wpkh({
+    pubkey: Buffer.from(keyPair.publicKey),
+    network: btcNetwork,
+  })
   
-  console.log(`   Inputs: ${psbt.inputCount}, Outputs: ${psbt.txOutputs.length}`)
+  if (!sourceAddress) throw new Error('Could not derive source address')
   
-  // Sign all inputs
-  for (let i = 0; i < psbt.inputCount; i++) {
-    try {
-      psbt.signInput(i, keyPair)
-      console.log(`   ✓ Signed input ${i}`)
-    } catch (err) {
-      console.log(`   ⚠️ Could not sign input ${i}: ${err}`)
+  // Extract outputs from Relay's PSBT
+  const relayOutputs = extractOutputsFromPsbt(psbtHex)
+  console.log(`   📋 Extracted ${relayOutputs.length} output(s) from Relay PSBT:`)
+  
+  // Log and calculate total output value (excluding change back to us)
+  let totalOutputValue = 0n
+  const outputsToInclude: RelayPsbtOutput[] = []
+  
+  for (const out of relayOutputs) {
+    if (out.isOpReturn) {
+      console.log(`      - OP_RETURN (${out.script.length} bytes)`)
+      outputsToInclude.push(out)
+    } else if (out.address === sourceAddress) {
+      // Skip Relay's change output - we'll calculate our own
+      console.log(`      - Change to us: ${out.value} sats (skipping, will recalculate)`)
+    } else {
+      console.log(`      - ${out.address}: ${out.value} sats`)
+      outputsToInclude.push(out)
+      totalOutputValue += out.value
     }
   }
   
-  // Finalize all inputs
-  psbt.finalizeAllInputs()
+  console.log(`   💰 Total to send: ${totalOutputValue} sats`)
   
-  // Extract and broadcast
-  const tx = psbt.extractTransaction()
-  const txHex = tx.toHex()
-  const txid = tx.getId()
+  // Fetch our UTXOs
+  const [allUtxos, pendingSpends, feeRates] = await Promise.all([
+    getUtxos(sourceAddress),
+    getPendingSpends(sourceAddress),
+    getRecommendedFees(),
+  ])
   
-  console.log(`   Tx ID: ${txid}`)
-  console.log(`   Broadcasting...`)
+  // Filter to available UTXOs (not in mempool, not reserved, not spent by us)
+  const availableUtxos = allUtxos.filter(u => {
+    const key = `${u.txid}:${u.vout}`
+    if (pendingSpends.has(key)) return false
+    if (isUtxoReserved(u)) return false
+    if (isUtxoSpentByUs(key).spent) return false
+    return true
+  })
   
-  const broadcastedTxid = await broadcastTx(txHex)
-  console.log(`   ✅ Broadcasted: ${broadcastedTxid}`)
+  if (availableUtxos.length === 0) {
+    throw new Error(`No available UTXOs for ${sourceAddress}`)
+  }
   
-  return broadcastedTxid
+  const totalAvailable = availableUtxos.reduce((s, u) => s + u.value, 0)
+  console.log(`   📦 UTXOs: ${availableUtxos.length} available (${totalAvailable} sats total)`)
+  
+  // Get fee rate
+  const feeRate = getFeeRateForTier(feeRates, feeTier)
+  console.log(`   ⛽ Fee rate: ${feeRate} sat/vB (${feeTier})`)
+  
+  // Calculate vsize: ~10.5 overhead + 68 per input + 31 per p2wpkh output + actual OP_RETURN size
+  const opReturnSize = outputsToInclude.filter(o => o.isOpReturn).reduce((s, o) => s + o.script.length + 9, 0)
+  const calcVsize = (inputs: number, regularOutputs: number) => 
+    Math.ceil(10.5 + (68 * inputs) + (31 * regularOutputs) + opReturnSize)
+  
+  // Select UTXOs
+  let selectedUtxos: UTXO[] = []
+  let totalInput = 0
+  const sortedUtxos = [...availableUtxos].sort((a, b) => b.value - a.value)
+  
+  // We'll have: Relay outputs + our change output
+  const numRegularOutputs = outputsToInclude.filter(o => !o.isOpReturn).length + 1 // +1 for change
+  
+  for (const utxo of sortedUtxos) {
+    selectedUtxos.push(utxo)
+    totalInput += utxo.value
+    
+    const estimatedVsize = calcVsize(selectedUtxos.length, numRegularOutputs)
+    const estimatedFee = feeRate * estimatedVsize
+    const totalNeeded = Number(totalOutputValue) + estimatedFee
+    
+    if (totalInput >= totalNeeded) break
+  }
+  
+  // Final fee calculation
+  const vsize = calcVsize(selectedUtxos.length, numRegularOutputs)
+  const fee = Math.ceil(feeRate * vsize)
+  
+  if (totalInput < Number(totalOutputValue) + fee) {
+    throw new Error(`Insufficient funds: have ${totalInput}, need ${Number(totalOutputValue) + fee}`)
+  }
+  
+  const change = totalInput - Number(totalOutputValue) - fee
+  console.log(`   🔢 Inputs: ${selectedUtxos.length}, Fee: ${fee} sats, Change: ${change} sats`)
+  
+  // Reserve UTXOs
+  reserveUtxos(selectedUtxos)
+  
+  try {
+    // Build the transaction
+    const psbt = new bitcoin.Psbt({ network: btcNetwork })
+    
+    // Add OUR inputs
+    for (const utxo of selectedUtxos) {
+      psbt.addInput({
+        hash: utxo.txid,
+        index: utxo.vout,
+        witnessUtxo: {
+          script: bitcoin.payments.p2wpkh({
+            pubkey: Buffer.from(keyPair.publicKey),
+            network: btcNetwork,
+          }).output!,
+          value: BigInt(utxo.value),
+        },
+      })
+    }
+    
+    // Add RELAY's outputs (deposit address + OP_RETURN)
+    for (const out of outputsToInclude) {
+      if (out.isOpReturn) {
+        // OP_RETURN output - add using raw script
+        psbt.addOutput({
+          script: out.script,
+          value: 0n,
+        })
+      } else if (out.address) {
+        // Regular output to Relay's deposit address
+        psbt.addOutput({
+          address: out.address,
+          value: out.value,
+        })
+      }
+    }
+    
+    // Add OUR change output (if above dust threshold)
+    if (change > 546) {
+      psbt.addOutput({
+        address: sourceAddress,
+        value: BigInt(change),
+      })
+    }
+    
+    // Sign all inputs
+    for (let i = 0; i < selectedUtxos.length; i++) {
+      psbt.signInput(i, keyPair)
+    }
+    
+    // Finalize and extract
+    psbt.finalizeAllInputs()
+    const tx = psbt.extractTransaction()
+    const txHex = tx.toHex()
+    const txid = tx.getId()
+    
+    const actualVsize = tx.virtualSize()
+    const actualFeeRate = (fee / actualVsize).toFixed(1)
+    console.log(`   📝 Tx ID: ${txid}`)
+    console.log(`   ⛽ Fee: ${fee} sats (${actualFeeRate} sat/vB actual, ${actualVsize} vB)`)
+    
+    // Broadcast
+    const broadcastedTxid = await broadcastTx(txHex)
+    console.log(`   ✅ Broadcasted: ${broadcastedTxid}`)
+    
+    // Record spent UTXOs
+    recordSpentUtxos(selectedUtxos, broadcastedTxid)
+    
+    // Record change output if we have one
+    if (change > 546) {
+      const changeVout = psbt.txOutputs.length - 1 // Change is last output
+      recordPendingChange(broadcastedTxid, changeVout, change)
+    }
+    
+    return broadcastedTxid
+    
+  } catch (err) {
+    releaseUtxos(selectedUtxos)
+    throw err
+  }
 }

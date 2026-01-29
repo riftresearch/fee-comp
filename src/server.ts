@@ -983,12 +983,12 @@ export function startServer() {
       for (const swap of swaps) {
         if (!swap.swapId) continue
         
-        // Find matching quote (same tokens, within 30s before the swap)
+        // Find matching quote (same tokens, within 2 minutes before the swap)
         const swapTime = new Date(swap.timestamp).getTime()
         const matchingQuote = quotes.find(q => 
           q.inputToken === swap.inputToken && 
           q.outputToken === swap.outputToken &&
-          Math.abs(new Date(q.timestamp).getTime() - swapTime) < 30000 &&
+          Math.abs(new Date(q.timestamp).getTime() - swapTime) < 120000 &&
           new Date(q.timestamp).getTime() <= swapTime
         )
         
@@ -1006,6 +1006,7 @@ export function startServer() {
           outputAmount: swap.outputAmount,
           provider: swap.provider,
           startTime: matchingQuote?.timestamp || swap.timestamp,
+          relayRequestId: swap.relayRequestId || null,
         })
       }
       
@@ -1251,8 +1252,14 @@ export function startServer() {
           \` : ''}
           \${isRelay && relayTxHash ? \`
           <div class="modal-row">
-            <span class="modal-label">Deposit Tx</span>
-            <span class="modal-value"><a href="\${ethExplorer}\${relayTxHash}" target="_blank">\${relayTxHash.slice(0, 16)}...</a>\${copyBtn(relayTxHash, 'Deposit Tx')}</span>
+            <span class="modal-label">\${journey.inputToken === 'BTC' ? 'BTC Deposit Tx' : 'ETH Deposit Tx'}</span>
+            <span class="modal-value"><a href="\${journey.inputToken === 'BTC' ? 'https://mempool.space/tx/' : ethExplorer}\${relayTxHash}" target="_blank">\${relayTxHash.slice(0, 16)}...</a>\${copyBtn(relayTxHash, 'Deposit Tx')}</span>
+          </div>
+          \` : ''}
+          \${isRelay && journey.relayRequestId ? \`
+          <div class="modal-row">
+            <span class="modal-label">Relay Journey</span>
+            <span class="modal-value"><a href="https://relay.link/transaction/\${journey.relayRequestId}" target="_blank">View on Relay</a>\${copyBtn(journey.relayRequestId, 'Request ID')}</span>
           </div>
           \` : ''}
           \${journey.settlement?.payoutTxHash ? \`

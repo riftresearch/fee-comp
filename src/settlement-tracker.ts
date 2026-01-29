@@ -72,11 +72,15 @@ export function startSettlementWatcher() {
 async function checkAllPending() {
   if (pendingSwaps.size === 0) return
   
+  // Pause countdown timer for entire settlement check to prevent interleaving
+  const pauseCountdown = (global as any).pauseCountdown
+  const resumeCountdown = (global as any).resumeCountdown
+  if (pauseCountdown) pauseCountdown()
+  
   // Fetch current token prices for settlement logging
   const prices = await getTokenPrices()
   
   // Collect all status lines first, then print them all at once
-  // This prevents the countdown timer from interleaving with our output
   const lines: string[] = []
   
   for (const [swapId, swap] of pendingSwaps) {
@@ -128,9 +132,6 @@ async function checkAllPending() {
     }
   }
   
-  // Clear the countdown line completely, then print all output at once
-  process.stdout.write('\r' + ' '.repeat(80) + '\r')
-  
   // Print header + all lines + footer as one block
   const output = [
     `\n${'─'.repeat(60)}`,
@@ -138,8 +139,11 @@ async function checkAllPending() {
     '─'.repeat(60),
     ...lines,
     '─'.repeat(60),
-    '' // Empty line before countdown resumes
+    ''
   ].join('\n')
   
   console.log(output)
+  
+  // Resume countdown timer after all logging is done
+  if (resumeCountdown) resumeCountdown()
 }
