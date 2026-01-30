@@ -104,11 +104,19 @@ export function logSettlement(settlement: SettlementResult, swap: SwapResult, pr
     ? parseFloat(fromSmallestUnit(settlement.actualOutputAmount, swap.outputToken))
     : parseFloat(swap.outputAmount)
   
-  // Use swap-time prices for both input and output to measure pure execution cost
-  // (ignoring market price drift between swap and settlement)
+  // Direction-aware pricing for fee calculation
+  // - BTC input (BTC->EVM): EVM swap happens at settlement time, use settlement prices for output
+  // - EVM input (EVM->BTC): price is locked at swap time, use swap prices for output
+  const isBtcInput = swap.inputToken === 'BTC'
   const swapTimePrices = swap.swapPrices || prices
+  
+  // Input: always use swap-time prices (when input was committed)
   const inputPrice = getPriceForToken(swap.inputToken, swapTimePrices as TokenPrices)
-  const outputPrice = getPriceForToken(swap.outputToken, swapTimePrices as TokenPrices)
+  
+  // Output: depends on direction
+  const outputPrice = isBtcInput 
+    ? getPriceForToken(swap.outputToken, prices)  // BTC->EVM: use settlement prices
+    : getPriceForToken(swap.outputToken, swapTimePrices as TokenPrices)  // EVM->BTC: use swap prices
   
   // Use stored inputUsd from swap if available, otherwise recalculate with swap-time prices
   const inputUsd = swap.inputUsd || (parseFloat(swap.inputAmount) * inputPrice)

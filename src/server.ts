@@ -48,7 +48,7 @@ export function startServer() {
       res.setHeader('Access-Control-Allow-Origin', '*')
       // Return pending chainflip swap IDs that we know about (from status checks)
       const data = parseCSV(csvFile)
-      const pendingChainflipSwaps = data
+      const allChainflipSwaps = data
         .filter((d: any) => d.type === 'swap' && d.provider === 'Chainflip' && d.status === 'pending')
         .map((d: any) => {
           const info = chainflip.getPendingSwapInfo(d.swapId)
@@ -57,7 +57,8 @@ export function startServer() {
             numericSwapId: info?.numericSwapId || null,
           }
         })
-        .filter((d: any) => d.numericSwapId)
+      // Only return swaps that have a numeric ID
+      const pendingChainflipSwaps = allChainflipSwaps.filter((d: any) => d.numericSwapId)
       res.end(JSON.stringify(pendingChainflipSwaps))
       return
     }
@@ -785,48 +786,38 @@ export function startServer() {
       min-width: 100px;
     }
 
-    .journey-output {
+    .journey-metrics {
       font-family: 'Fira Code', monospace;
-      font-size: 0.8rem;
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      min-width: 140px;
-    }
-
-    .journey-output .expected {
-      color: var(--text-muted);
       font-size: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 280px;
     }
 
-    .journey-output .actual {
+    .journey-metrics .actual {
       color: var(--accent-green);
     }
 
-    .journey-fees {
-      font-family: 'Fira Code', monospace;
-      font-size: 0.75rem;
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      min-width: 100px;
-      text-align: right;
-    }
-
-    .journey-fees .usd {
+    .journey-metrics .usd {
       color: var(--text-muted);
     }
 
-    .journey-fees .bips {
+    .journey-metrics .bips {
       font-weight: 600;
     }
 
-    .journey-fees .bips.positive {
+    .journey-metrics .bips.positive {
       color: var(--accent-red);
     }
 
-    .journey-fees .bips.negative {
+    .journey-metrics .bips.negative {
       color: var(--accent-green);
+    }
+
+    .journey-metrics .separator {
+      color: var(--text-muted);
+      opacity: 0.5;
     }
 
     .journey-steps {
@@ -1195,8 +1186,16 @@ export function startServer() {
         if (journey.settlement.payoutTxHash || journey.settlement.status === 'completed') {
           return 'settled'
         }
-        // Settlement exists but no payout yet - still settled (in progress)
-        return 'settled'
+        // Check if this is a real settlement or just a pseudo-object with only chainflipSwapId
+        // A real settlement has status, payoutTxHash, actualOutputAmount, or timestamp
+        const hasRealSettlementData = journey.settlement.status || 
+          journey.settlement.payoutTxHash || 
+          journey.settlement.actualOutputAmount ||
+          journey.settlement.timestamp
+        if (hasRealSettlementData) {
+          return 'settled'
+        }
+        // Otherwise it's just a pseudo-settlement with chainflipSwapId - treat as pending
       }
       // No settlement record - check if swap is stuck (more than 24 hours without settlement)
       const swapTime = new Date(journey.swap.timestamp).getTime()
@@ -1223,7 +1222,7 @@ export function startServer() {
       const statusLabel = statusLabels[status] || status
       const statusClass = ['timeout', 'failed', 'stuck'].includes(status) ? 'stuck' : status
       const startTime = new Date(journey.startTime)
-      const elapsed = journey.settlement 
+      const elapsed = (journey.settlement && journey.settlement.timestamp)
         ? new Date(journey.settlement.timestamp).getTime() - startTime.getTime()
         : Date.now() - startTime.getTime()
       
@@ -1262,13 +1261,12 @@ export function startServer() {
           <span class="journey-provider \${providerClass}">\${providerEmoji} \${journey.provider}</span>
           <span class="journey-direction">\${journey.inputToken} → \${journey.outputToken}</span>
           <span class="journey-amount">\${journey.inputAmount} \${journey.inputToken}</span>
-          <div class="journey-output">
-            <span class="expected">exp: \${parseFloat(expectedOutput).toFixed(4)} \${journey.outputToken}</span>
-            <span class="actual">\${actualOutput ? 'act: ' + parseFloat(actualOutput).toFixed(4) + ' ' + journey.outputToken : '⏳ pending'}</span>
-          </div>
-          <div class="journey-fees">
-            \${inputUsd ? \`<span class="usd">$\${parseFloat(inputUsd).toFixed(2)} → $\${outputUsd ? parseFloat(outputUsd).toFixed(2) : '...'}</span>\` : '<span class="usd">—</span>'}
-            \${feeBips ? \`<span class="bips \${bipsClass}">\${bipsNum > 0 ? '+' : ''}\${bipsNum.toFixed(0)} bips</span>\` : '<span class="bips">⏳</span>'}
+          <div class="journey-metrics">
+            <span class="actual">\${actualOutput ? parseFloat(actualOutput).toFixed(4) + ' ' + journey.outputToken : '⏳'}</span>
+            <span class="separator">|</span>
+            <span class="usd">\${inputUsd ? '$' + parseFloat(inputUsd).toFixed(2) + ' → $' + (outputUsd ? parseFloat(outputUsd).toFixed(2) : '...') : '—'}</span>
+            <span class="separator">|</span>
+            <span class="bips \${bipsClass}">\${feeBips ? (bipsNum > 0 ? '+' : '') + bipsNum.toFixed(0) + ' bips' : '⏳'}</span>
           </div>
           <div class="journey-steps">
             <span class="journey-step \${journey.quote ? 'active' : 'inactive'}">📊 \${quoteTime}</span>
@@ -1350,7 +1348,7 @@ export function startServer() {
       const copyBtn = (text, label) => text ? \`<button onclick="event.stopPropagation(); copyToClipboard('\${text}', this)" style="background:transparent;border:1px solid var(--border);border-radius:4px;padding:2px 8px;cursor:pointer;color:var(--text-muted);font-size:0.7rem;margin-left:8px;">Copy</button>\` : ''
       
       const startTime = new Date(journey.startTime).getTime()
-      const endTime = journey.settlement ? new Date(journey.settlement.timestamp).getTime() : Date.now()
+      const endTime = (journey.settlement && journey.settlement.timestamp) ? new Date(journey.settlement.timestamp).getTime() : Date.now()
       const totalElapsed = formatElapsed(endTime - startTime)
       
       let html = \`

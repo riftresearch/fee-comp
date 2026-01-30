@@ -11,6 +11,9 @@ importers:
       '@chainflip/sdk':
         specifier: ^2.0.1
         version: 2.0.1(@types/node@20.19.30)(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      '@defuse-protocol/one-click-sdk-typescript':
+        specifier: ^0.1.15
+        version: 0.1.15
       '@relayprotocol/relay-sdk':
         specifier: ^5.0.2
         version: 5.0.2(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76))
@@ -150,6 +153,10 @@ packages:
 
   '@date-fns/utc@2.1.1':
     resolution: {integrity: sha512-SlJDfG6RPeEX8wEVv6ZB3kak4MmbtyiI2qX/5zuKdordbrhB/iaJ58GVMZgJ6P1sJaM1gMgENFYYeg1JWrCFrA==}
+
+  '@defuse-protocol/one-click-sdk-typescript@0.1.15':
+    resolution: {integrity: sha512-cVwmBiTQdjyA+nPOrw+AKQjRK1uCfRNVM9RXeWtcKRCXzwNuEyu34hhqOl2mWwBHnqFZEO3iz3kYK+SomEbMgA==}
+    engines: {node: '>=16', pnpm: '>=8'}
 
   '@esbuild/aix-ppc64@0.27.2':
     resolution: {integrity: sha512-GZMB+a0mOMZs4MpDbj8RJp4cw+w1WV5NYD6xzgvzUJ5Ek2jerwfO2eADyI6ExDSUED+1X8aMbegahsJi+8mgpw==}
@@ -1506,6 +1513,13 @@ snapshots:
       viem: 2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)(zod@3.25.76)
 
   '@date-fns/utc@2.1.1': {}
+
+  '@defuse-protocol/one-click-sdk-typescript@0.1.15':
+    dependencies:
+      axios: 1.13.2
+      form-data: 4.0.5
+    transitivePeerDependencies:
+      - debug
 
   '@esbuild/aix-ppc64@0.27.2':
     optional: true

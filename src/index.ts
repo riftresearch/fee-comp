@@ -22,7 +22,7 @@ import {
 // ============================================================================
 const PROVIDERS = {
   rift: false,
-  relay: false,
+  relay: true,
   thorchain: true,
   chainflip: true,
 }

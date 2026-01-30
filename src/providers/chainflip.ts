@@ -232,6 +232,8 @@ export const chainflip = {
       }
 
       const state = (status as any).state || (status as any).status
+      const statusSwapId = (status as any).swapId
+      console.log(`   📊 Status: ${state}${statusSwapId ? ` | CF#${statusSwapId}` : ' | (no swapId yet)'}`)
       
       // Extract numeric swap ID for explorer link (e.g., 1263424)
       const numericSwapId = (status as any).swapId
@@ -239,6 +241,7 @@ export const chainflip = {
       // Store numeric swap ID if we found it
       if (numericSwapId && !storedSwap.numericSwapId) {
         storedSwap.numericSwapId = String(numericSwapId)
+        console.log(`   🔢 Chainflip Swap ID: ${numericSwapId} -> https://scan.chainflip.io/swaps/${numericSwapId}`)
       }
 
       if (state === 'COMPLETE' || state === 'COMPLETED') {

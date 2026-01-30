@@ -98,7 +98,7 @@ export async function getBalances(): Promise<BalanceResult> {
     
     // ETH balance
     mainnetPublicClient.getBalance({ address: EVM_ADDRESS as `0x${string}` })
-      .then(bal => Number(bal) / 1e18)
+      .then((bal: bigint) => Number(bal) / 1e18)
       .catch(() => 0),
     
     // USDC balance (6 decimals)
@@ -108,7 +108,7 @@ export async function getBalances(): Promise<BalanceResult> {
       functionName: 'balanceOf',
       args: [EVM_ADDRESS as `0x${string}`],
     })
-      .then(bal => Number(bal) / 1e6)
+      .then((bal: unknown) => Number(bal) / 1e6)
       .catch(() => 0),
     
     // CBBTC balance (8 decimals)
@@ -118,7 +118,7 @@ export async function getBalances(): Promise<BalanceResult> {
       functionName: 'balanceOf',
       args: [EVM_ADDRESS as `0x${string}`],
     })
-      .then(bal => Number(bal) / 1e8)
+      .then((bal: unknown) => Number(bal) / 1e8)
       .catch(() => 0),
     
     // Prices from shared helper
