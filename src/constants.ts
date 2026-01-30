@@ -11,10 +11,10 @@ export const EXECUTE_SWAPS = false
 
 // EVM → BTC Swaps
 export const evmToBtcSwaps: SwapParams[] = [
-  // $~20 - TEST SWAPS
+  // ~$20 - TEST SWAPS
   // { inputToken: 'CBBTC', outputToken: 'BTC', inputAmount: '0.0002' },  // Relay/Rift only (THORChain doesn't support CBBTC)
   { inputToken: 'USDC', outputToken: 'BTC', inputAmount: '20' },  // Works with all providers
-  { inputToken: 'ETH', outputToken: 'BTC', inputAmount: '0.006' },
+  // { inputToken: 'ETH', outputToken: 'BTC', inputAmount: '0.01' },
   // broken ^ retest (for rift at least)
 
 
@@ -36,9 +36,9 @@ export const evmToBtcSwaps: SwapParams[] = [
 
 // BTC → EVM Swaps
 export const btcToEvmSwaps: SwapParams[] = [
-  // $~ 20 - TEST SWAPS/*  */
+  // ~ $20-30 - TEST SWAPS/*  */
   // { inputToken: 'BTC', outputToken: 'CBBTC', inputAmount: '0.0002' },
-  // { inputToken: 'BTC', outputToken: 'USDC', inputAmount: '0.0002' },
+  { inputToken: 'BTC', outputToken: 'USDC', inputAmount: '0.0004' },
   // { inputToken: 'BTC', outputToken: 'ETH', inputAmount: '0.0002' },
 
   // // $~100 - SMALL TIER SWAPS

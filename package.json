@@ -10,6 +10,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@chainflip/sdk": "^2.0.1",
     "@relayprotocol/relay-sdk": "^5.0.2",
     "@riftresearch/sdk": "^0.1.4",
     "bitcoinjs-lib": "^7.0.1",

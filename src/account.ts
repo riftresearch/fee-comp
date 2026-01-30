@@ -6,6 +6,9 @@ import * as bitcoin from 'bitcoinjs-lib'
 import ECPairFactory from 'ecpair'
 import * as ecc from 'tiny-secp256k1'
 
+// Initialize ECC library for bitcoinjs-lib (required for Taproot/P2TR addresses)
+bitcoin.initEccLib(ecc)
+
 // Initialize ECPair with secp256k1
 const ECPair = ECPairFactory(ecc)
 
@@ -753,9 +756,14 @@ export async function sendBitcoin(
   // Filter out UTXOs that are:
   // 1. Being spent in pending mempool transactions
   // 2. Locally reserved by concurrent transactions
-  const availableUtxos = allUtxos.filter(u => 
-    !pendingSpends.has(`${u.txid}:${u.vout}`) && !isUtxoReserved(u)
-  )
+  // 3. Already spent by us (tracked locally after broadcast)
+  const availableUtxos = allUtxos.filter(u => {
+    const key = `${u.txid}:${u.vout}`
+    if (pendingSpends.has(key)) return false
+    if (isUtxoReserved(u)) return false
+    if (isUtxoSpentByUs(key).spent) return false
+    return true
+  })
   
   if (allUtxos.length === 0) {
     throw new Error(`No UTXOs found for ${sourceAddress}`)
@@ -763,18 +771,20 @@ export async function sendBitcoin(
   
   const mempoolPendingCount = allUtxos.filter(u => pendingSpends.has(`${u.txid}:${u.vout}`)).length
   const localReservedCount = allUtxos.filter(u => isUtxoReserved(u)).length
+  const locallySpentCount = allUtxos.filter(u => isUtxoSpentByUs(`${u.txid}:${u.vout}`).spent).length
   
   if (availableUtxos.length === 0) {
     throw new Error(
       `No available UTXOs. Total: ${allUtxos.length}, ` +
       `mempool pending: ${mempoolPendingCount}, ` +
-      `locally reserved: ${localReservedCount}. ` +
+      `locally reserved: ${localReservedCount}, ` +
+      `locally spent: ${locallySpentCount}. ` +
       `Wait for confirmation or reservation expiry.`
     )
   }
   
   const totalAvailable = availableUtxos.reduce((s, u) => s + u.value, 0)
-  console.log(`   UTXOs: ${availableUtxos.length} available (${mempoolPendingCount} mempool pending, ${localReservedCount} locally reserved)`)
+  console.log(`   UTXOs: ${availableUtxos.length} available (${mempoolPendingCount} mempool pending, ${localReservedCount} reserved, ${locallySpentCount} spent)`)
   console.log(`   Total available: ${totalAvailable} sats`)
 
   // Get dynamic fee rate based on tier
@@ -871,8 +881,13 @@ export async function sendBitcoin(
     const broadcastedTxid = await broadcastTx(txHex)
     console.log(`   ✅ Broadcasted: ${broadcastedTxid}`)
 
-    // Keep UTXOs reserved (they're now in mempool, will be filtered by getPendingSpends)
-    // Reservations will auto-expire after TTL as a safety net
+    // Record spent UTXOs for local tracking (prevents UTXO conflicts before mempool propagation)
+    recordSpentUtxos(selectedUtxos, broadcastedTxid)
+    
+    // Record change output if we have one (available for immediate spending)
+    if (change > 546) {
+      recordPendingChange(broadcastedTxid, 1, change) // Change is output index 1
+    }
     
     return broadcastedTxid
   } catch (err) {

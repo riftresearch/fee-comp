@@ -1,6 +1,7 @@
 import { rift } from './providers/rift.js'
 import { relay } from './providers/relay.js'
 import { thorchain } from './providers/thorchain.js'
+import { chainflip } from './providers/chainflip.js'
 import { logSettlement } from './csv.js'
 import { type SwapResult, type SettlementResult, colorPair } from './providers/types.js'
 import { getTokenPrices } from './prices.js'
@@ -13,6 +14,7 @@ const providerCheckers: Record<string, {
   Rift: rift,
   Relay: relay,
   Thorchain: thorchain,
+  Chainflip: chainflip,
 }
 
 // Pending swaps waiting for settlement
@@ -29,6 +31,7 @@ const PROVIDER_EMOJI: Record<string, string> = {
   Rift: '⚡',
   Thorchain: '🌀',
   Relay: '🔗',
+  Chainflip: '🔄',
 }
 
 function providerTag(provider: string): string {
@@ -115,8 +118,11 @@ async function checkAllPending() {
       
       const settlement = await checker.checkSettlementOnce(swapId, false) // quiet mode
       
-      if (settlement && settlement.payoutTxHash) {
-        lines.push(`  ✅ [${tag}] ${colorPair(swap.inputToken, swap.outputToken)} SETTLED | Tx: ${settlement.payoutTxHash.slice(0, 16)}...`)
+      if (settlement && (settlement.status === 'completed' || settlement.payoutTxHash)) {
+        const txInfo = settlement.payoutTxHash 
+          ? ` | Tx: ${settlement.payoutTxHash.slice(0, 16)}...`
+          : ''
+        lines.push(`  ✅ [${tag}] ${colorPair(swap.inputToken, swap.outputToken)} SETTLED${txInfo}`)
         logSettlement(settlement, swap, prices)
         pendingSwaps.delete(swapId)
       } else if (settlement && settlement.status === 'failed') {

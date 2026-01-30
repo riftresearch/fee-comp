@@ -1,6 +1,7 @@
 import { logAccountConfig, initializeUtxoStateFromMempool } from './account.js'
 import { rift } from './providers/rift.js'
 import { thorchain, recoverPendingSwapsFromCSV as recoverThorchainSwaps } from './providers/thorchain.js'
+import { chainflip } from './providers/chainflip.js'
 import { relay } from './providers/relay.js'
 import { type SwapParams, colorToken, colorPair } from './providers/types.js'
 import { logQuote, logSwap } from './csv.js'
@@ -21,8 +22,9 @@ import {
 // ============================================================================
 const PROVIDERS = {
   rift: false,
-  relay: false,
+  relay: true,
   thorchain: true,
+  chainflip: true,
 }
 
 // parse CLI args (--execute)
@@ -92,6 +94,15 @@ async function executeSwaps(swaps: SwapParams[]) {
           console.error(`  ❌ Thorchain Error: ${err instanceof Error ? err.message : err}`)
         }
       }
+
+      // ---------------------------------- CHAINFLIP (sequential) --------------------------------------
+      if (PROVIDERS.chainflip && chainflip.supportsSwap(swap.inputToken, swap.outputToken)) {
+        try {
+          await executeProviderSwap(chainflip as Parameters<typeof executeProviderSwap>[0], swap, prices)
+        } catch (err) {
+          console.error(`  ❌ Chainflip Error: ${err instanceof Error ? err.message : err}`)
+        }
+      }
     }
     return
   }
@@ -122,6 +133,15 @@ async function executeSwaps(swaps: SwapParams[]) {
         await executeProviderSwap(thorchain as Parameters<typeof executeProviderSwap>[0], swap, prices)
       } catch (err) {
         console.error(`  ❌ Thorchain Error: ${err instanceof Error ? err.message : err}`)
+      }
+    }
+
+    // ---------------------------------- CHAINFLIP --------------------------------------
+    if (PROVIDERS.chainflip && chainflip.supportsSwap(swap.inputToken, swap.outputToken)) {
+      try {
+        await executeProviderSwap(chainflip as Parameters<typeof executeProviderSwap>[0], swap, prices)
+      } catch (err) {
+        console.error(`  ❌ Chainflip Error: ${err instanceof Error ? err.message : err}`)
       }
     }
   }

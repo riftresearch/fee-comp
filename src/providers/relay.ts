@@ -1,3 +1,4 @@
+// @ts-ignore - SDK types may not be up to date
 import { createClient, getClient, MAINNET_RELAY_API } from '@relayprotocol/relay-sdk'
 import {
   mainnetWalletClient,
@@ -176,7 +177,7 @@ export const relay = {
           quote: quoteResponse,
           wallet: mainnetWalletClient as any,
           depositGasLimit: '1000000', // Higher gas limit for complex swaps
-          onProgress: (progressData) => {
+          onProgress: (progressData: any) => {
             const { steps, fees, breakdown, currentStep, currentStepItem, txHashes, details } = progressData
             
             // store data
@@ -272,7 +273,7 @@ export const relay = {
             }
             
             // Check if completed
-            const allComplete = steps?.every(s => 
+            const allComplete = steps?.every((s: any) => 
               s.items?.every((item: { status?: string }) => item.status === 'complete')
             )
             if (allComplete && finalStatus !== 'complete') {

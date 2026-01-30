@@ -3,7 +3,7 @@ import { readFileSync, existsSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { getBalances, BTC_ADDRESS, EVM_ADDRESS } from './account.js'
 
-const CSV_HEADER = 'timestamp,type,provider,inputToken,outputToken,inputAmount,outputAmount,swapId,status,payoutTxHash,actualOutputAmount,btcPrice,cbbtcPrice,usdcPrice,ethPrice,relayRequestId'
+const CSV_HEADER = 'timestamp,type,provider,inputToken,outputToken,inputAmount,outputAmount,swapId,txHash,status,payoutTxHash,actualOutputAmount,btcPrice,cbbtcPrice,usdcPrice,ethPrice,relayRequestId,chainflipSwapId,inputUsd,outputUsd,usdLost,feeBips'
 
 const PORT = 3457
 
@@ -360,6 +360,27 @@ export function startServer() {
       gap: 6px;
       padding: 4px 10px;
       background: rgba(245, 158, 11, 0.1);
+      font-weight: 500;
+    }
+    
+    .provider-badge.relay {
+      background: rgba(168, 85, 247, 0.1);
+      color: var(--accent-purple);
+    }
+    
+    .provider-badge.rift {
+      background: rgba(59, 130, 246, 0.1);
+      color: var(--accent-blue);
+    }
+    
+    .provider-badge.thorchain {
+      background: rgba(34, 197, 94, 0.1);
+      color: var(--accent-green);
+    }
+    
+    .provider-badge.chainflip {
+      background: rgba(0, 229, 255, 0.1);
+      color: var(--accent-cyan);
       border-radius: 6px;
       color: var(--accent-orange);
       font-size: 0.8rem;
@@ -712,6 +733,8 @@ export function startServer() {
 
     .journey-provider.rift { color: var(--accent-blue); }
     .journey-provider.relay { color: var(--accent-purple); }
+    .journey-provider.thorchain { color: var(--accent-green); }
+    .journey-provider.chainflip { color: var(--accent-cyan); }
 
     .journey-direction {
       font-family: 'Fira Code', monospace;
@@ -1086,10 +1109,10 @@ export function startServer() {
         // Settlement exists but no payout yet - still settled (in progress)
         return 'settled'
       }
-      // No settlement record - check if swap is stuck (more than 2 hours without settlement)
+      // No settlement record - check if swap is stuck (more than 24 hours without settlement)
       const swapTime = new Date(journey.swap.timestamp).getTime()
       const elapsed = Date.now() - swapTime
-      if (elapsed > 2 * 60 * 60 * 1000) return 'stuck'
+      if (elapsed > 24 * 60 * 60 * 1000) return 'stuck'
       return 'pending'
     }
     
@@ -1118,13 +1141,14 @@ export function startServer() {
       const formatTime = (ts) => ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'
       
       const providerClass = journey.provider.toLowerCase()
+      const providerEmoji = { Rift: '🌀', Relay: '🔗', Thorchain: '⚡', Chainflip: '🔄' }[journey.provider] || '⚡'
       const quoteTime = journey.quote ? formatTime(journey.quote.timestamp) : '—'
       const swapTime = formatTime(journey.swap.timestamp)
       const settlementTime = journey.settlement ? formatTime(journey.settlement.timestamp) : '—'
       
       return \`
         <div class="journey-row \${statusClass}" onclick="showJourneyDetails(\${idx})">
-          <span class="journey-provider \${providerClass}">\${journey.provider}</span>
+          <span class="journey-provider \${providerClass}">\${providerEmoji} \${journey.provider}</span>
           <span class="journey-direction">\${journey.inputToken} → \${journey.outputToken}</span>
           <span class="journey-amount">\${journey.inputAmount} \${journey.inputToken}</span>
           <div class="journey-steps">
@@ -1295,6 +1319,35 @@ export function startServer() {
           </div>
           \`;
           })() : ''}
+          \${journey.provider === 'Chainflip' && journey.swap?.swapId ? (() => {
+            const isBtcInput = journey.inputToken === 'BTC';
+            const depositTxHash = journey.swap.txHash || journey.swap.swapId;
+            const depositExplorer = isBtcInput 
+              ? \`https://mempool.space/tx/\${depositTxHash}\`
+              : \`https://etherscan.io/tx/\${depositTxHash}\`;
+            // Use chainflipSwapId from settlement if available, otherwise show pending
+            const cfSwapId = journey.settlement?.chainflipSwapId;
+            return \`
+          <div class="modal-row">
+            <span class="modal-label">\${isBtcInput ? 'BTC' : 'ETH'} Deposit Tx</span>
+            <span class="modal-value"><a href="\${depositExplorer}" target="_blank">\${depositTxHash.slice(0, 16)}...</a>\${copyBtn(depositTxHash, 'Deposit Tx')}</span>
+          </div>
+          \${cfSwapId ? \`
+          <div class="modal-row">
+            <span class="modal-label">Chainflip Swap</span>
+            <span class="modal-value">
+              <a href="https://scan.chainflip.io/swaps/\${cfSwapId}" target="_blank">#\${cfSwapId}</a>
+              \${copyBtn(cfSwapId, 'Swap ID')}
+            </span>
+          </div>
+          \` : \`
+          <div class="modal-row">
+            <span class="modal-label">Chainflip Swap</span>
+            <span class="modal-value" style="color: var(--text-muted)">Pending indexing...</span>
+          </div>
+          \`}
+          \`;
+          })() : ''}
           \${journey.settlement?.payoutTxHash ? \`
           <div class="modal-row">
             <span class="modal-label">\${isBtcOutput ? 'BTC Payout Tx' : 'Payout Tx'}</span>
@@ -1350,7 +1403,7 @@ export function startServer() {
           <div class="modal-section-title">Provider</div>
           <div class="modal-row">
             <span class="modal-label">Provider</span>
-            <span class="modal-value">⚡ \${journey.provider}</span>
+            <span class="modal-value" style="color: var(--accent-\${{ Relay: 'purple', Rift: 'blue', Thorchain: 'green', Chainflip: 'cyan' }[journey.provider] || 'orange'})">\${{ Rift: '🌀', Relay: '🔗', Thorchain: '⚡', Chainflip: '🔄' }[journey.provider] || '⚡'} \${journey.provider}</span>
           </div>
         </div>
       \`
@@ -1411,7 +1464,7 @@ export function startServer() {
               <td style="color: var(--text-muted)">\${time}</td>
               <td class="pair">\${row.inputToken}<span class="pair-arrow">→</span>\${row.outputToken}</td>
               <td><span class="badge \${badgeClass}">\${row.type}</span></td>
-              <td><span class="provider-badge">⚡ \${row.provider}</span></td>
+              <td><span class="provider-badge \${row.provider.toLowerCase()}">\${{ Rift: '🌀', Relay: '🔗', Thorchain: '⚡', Chainflip: '🔄' }[row.provider] || '⚡'} \${row.provider}</span></td>
               <td class="amount">\${row.inputAmount}</td>
               <td class="amount">\${row.outputAmount || '-'}</td>
               <td><span class="badge \${status === 'completed' ? 'badge-settlement' : 'badge-quote'}">\${status}</span></td>
@@ -1484,7 +1537,7 @@ export function startServer() {
           </div>
           <div class="modal-row">
             <span class="modal-label">Provider</span>
-            <span class="modal-value">\${row.provider}</span>
+            <span class="modal-value" style="color: var(--accent-\${{ Relay: 'purple', Rift: 'blue', Thorchain: 'green', Chainflip: 'cyan' }[row.provider] || 'orange'})">\${{ Rift: '🌀', Relay: '🔗', Thorchain: '⚡', Chainflip: '🔄' }[row.provider] || '⚡'} \${row.provider}</span>
           </div>
           <div class="modal-row">
             <span class="modal-label">Time</span>

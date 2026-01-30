@@ -14,6 +14,7 @@ import {
   type SwapParams,
   type SettlementResult,
   toSmallestUnit,
+  fromSmallestUnit,
   colorToken,
   colorPair,
 } from './types.js'
@@ -224,7 +225,7 @@ export const thorchain = {
     quoteUrl.searchParams.set('to_asset', toAsset.asset)
     quoteUrl.searchParams.set('amount', thorchainAmount)
     quoteUrl.searchParams.set('destination', destination)
-    quoteUrl.searchParams.set('tolerance_bps', '500') // 5% slippage tolerance
+    quoteUrl.searchParams.set('tolerance_bps', '1000') // 10% slippage tolerance (small amounts need more buffer)
 
     console.log(`   🌀 Fetching THORChain quote...`)
 
@@ -240,19 +241,25 @@ export const thorchain = {
       throw new Error(`Thorchain: ${quoteData.error}`)
     }
 
-    // Convert expected_amount_out from 1e8 to native decimals
-    let outputAmount: string
+    // Convert expected_amount_out from 1e8 to human-readable format
+    // THORChain always returns amounts in 1e8 (8 decimals)
+    // Step 1: Convert from 1e8 to token's native smallest unit
+    // Step 2: Convert from smallest unit to human-readable
+    let nativeSmallestUnit: string
     if (toAsset.decimals > 8) {
-      // Multiply to get native decimals
+      // Token has more decimals than THORChain - multiply
       const multiplier = BigInt(10 ** (toAsset.decimals - 8))
-      outputAmount = (BigInt(quoteData.expected_amount_out) * multiplier).toString()
+      nativeSmallestUnit = (BigInt(quoteData.expected_amount_out) * multiplier).toString()
     } else if (toAsset.decimals < 8) {
-      // Divide to get native decimals
+      // Token has fewer decimals than THORChain - divide
       const divisor = BigInt(10 ** (8 - toAsset.decimals))
-      outputAmount = (BigInt(quoteData.expected_amount_out) / divisor).toString()
+      nativeSmallestUnit = (BigInt(quoteData.expected_amount_out) / divisor).toString()
     } else {
-      outputAmount = quoteData.expected_amount_out
+      // Same decimals (BTC = 8)
+      nativeSmallestUnit = quoteData.expected_amount_out
     }
+    // Convert to human-readable (e.g., 21550 sats -> "0.00021550" BTC)
+    const outputAmount = fromSmallestUnit(nativeSmallestUnit, outputToken)
 
     const quoteResult: Quote = {
       provider: 'Thorchain',

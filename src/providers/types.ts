@@ -21,6 +21,7 @@ export interface SwapResult {
   timestamp: number
   error?: string  // Optional error message for failed/skipped swaps
   relayRequestId?: string | null  // Relay-specific: request ID for tracking
+  inputUsd?: number  // USD value of input at swap time (for fee calculation)
 }
 
 export interface SettlementResult {
@@ -29,6 +30,7 @@ export interface SettlementResult {
   payoutTxHash: string | null
   actualOutputAmount: string | null
   settledAt: number | null
+  chainflipSwapId?: string | null  // Numeric swap ID for Chainflip explorer
 }
 
 export interface SwapParams {
@@ -50,6 +52,14 @@ export function toSmallestUnit(amount: string, token: string): string {
   const [whole, frac = ''] = amount.split('.')
   const paddedFrac = frac.padEnd(decimals, '0').slice(0, decimals)
   return BigInt(whole + paddedFrac).toString()
+}
+
+export function fromSmallestUnit(amount: string, token: string): string {
+  const decimals = DECIMALS[token] || 18
+  const padded = amount.padStart(decimals + 1, '0')
+  const whole = padded.slice(0, -decimals) || '0'
+  const frac = padded.slice(-decimals).replace(/0+$/, '')
+  return frac ? `${whole}.${frac}` : whole
 }
 
 // Terminal color codes for tokens
