@@ -362,7 +362,35 @@ export const thorchain = {
         // Find the outbound transaction
         const outTx = action.out?.[0]
         const payoutTxHash = outTx?.txID || null
-        const actualAmount = outTx?.coins?.[0]?.amount || null
+        const thorchainAmount = outTx?.coins?.[0]?.amount || null
+        
+        // THORChain returns all amounts in 1e8 format
+        // Convert to the token's native decimals for consistency with other providers
+        let actualAmount: string | null = null
+        let outputTokenSymbol: string | null = null
+        if (thorchainAmount) {
+          // Find the output token by matching the THORChain asset
+          const outputEntry = Object.entries(THORCHAIN_ASSETS).find(([_, v]) => v.asset === storedSwap.toAsset)
+          if (outputEntry) {
+            outputTokenSymbol = outputEntry[0]
+            const nativeDecimals = outputEntry[1].decimals
+            // Convert from 1e8 to native decimals: amount * 10^(nativeDecimals-8)
+            const thorDecimals = 8
+            if (nativeDecimals === thorDecimals) {
+              actualAmount = thorchainAmount
+            } else {
+              // For USDC (6 decimals): divide by 100 (10^(8-6))
+              // For ETH (18 decimals): multiply by 10^10
+              const scaleFactor = BigInt(10) ** BigInt(Math.abs(nativeDecimals - thorDecimals))
+              const thorBigInt = BigInt(thorchainAmount)
+              if (nativeDecimals < thorDecimals) {
+                actualAmount = (thorBigInt / scaleFactor).toString()
+              } else {
+                actualAmount = (thorBigInt * scaleFactor).toString()
+              }
+            }
+          }
+        }
 
         console.log(`   ✅ THORChain swap completed!`)
         if (payoutTxHash) {
@@ -373,8 +401,9 @@ export const thorchain = {
           console.log(`   🔗 Payout Tx: ${payoutTxHash}`)
           console.log(`      ${explorer}`)
         }
-        if (actualAmount) {
-          console.log(`   💰 Actual Output: ${actualAmount}`)
+        if (actualAmount && outputTokenSymbol) {
+          const humanAmount = fromSmallestUnit(actualAmount, outputTokenSymbol)
+          console.log(`   💰 Actual Output: ${humanAmount} ${outputTokenSymbol}`)
         }
 
         // Remove from pending swaps so we don't check again

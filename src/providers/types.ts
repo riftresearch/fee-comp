@@ -22,6 +22,13 @@ export interface SwapResult {
   error?: string  // Optional error message for failed/skipped swaps
   relayRequestId?: string | null  // Relay-specific: request ID for tracking
   inputUsd?: number  // USD value of input at swap time (for fee calculation)
+  // Prices at swap time (for consistent fee calculation regardless of market drift)
+  swapPrices?: {
+    btc: number
+    cbbtc: number
+    usdc: number
+    eth: number
+  }
 }
 
 export interface SettlementResult {

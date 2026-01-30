@@ -310,6 +310,18 @@ export const chainflip = {
     if (!swap) return 'unknown'
     return swap.status
   },
+
+  /**
+   * Get pending swap info including numeric swap ID (for UI display before settlement)
+   */
+  getPendingSwapInfo(swapId: string): { numericSwapId: string | null; status: string } | null {
+    const swap = pendingSwaps.get(swapId)
+    if (!swap) return null
+    return {
+      numericSwapId: swap.numericSwapId,
+      status: swap.status,
+    }
+  },
 }
 
 // Execute BTC -> EVM swap using deposit address

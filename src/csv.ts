@@ -60,6 +60,14 @@ export function logSwap(swap: SwapResult, prices: TokenPrices) {
   const inputUsd = parseFloat(swap.inputAmount) * inputPrice
   swap.inputUsd = inputUsd  // Store for settlement tracking
   
+  // Store swap-time prices for consistent fee calculation (ignoring market drift)
+  swap.swapPrices = {
+    btc: prices.btc,
+    cbbtc: prices.cbbtc,
+    usdc: prices.usdc,
+    eth: prices.eth,
+  }
+  
   const row = [
     new Date(swap.timestamp).toISOString(),
     'swap',
@@ -96,11 +104,13 @@ export function logSettlement(settlement: SettlementResult, swap: SwapResult, pr
     ? parseFloat(fromSmallestUnit(settlement.actualOutputAmount, swap.outputToken))
     : parseFloat(swap.outputAmount)
   
-  // Calculate USD values
-  const inputPrice = getPriceForToken(swap.inputToken, prices)
-  const outputPrice = getPriceForToken(swap.outputToken, prices)
+  // Use swap-time prices for both input and output to measure pure execution cost
+  // (ignoring market price drift between swap and settlement)
+  const swapTimePrices = swap.swapPrices || prices
+  const inputPrice = getPriceForToken(swap.inputToken, swapTimePrices as TokenPrices)
+  const outputPrice = getPriceForToken(swap.outputToken, swapTimePrices as TokenPrices)
   
-  // Use stored inputUsd from swap if available, otherwise recalculate
+  // Use stored inputUsd from swap if available, otherwise recalculate with swap-time prices
   const inputUsd = swap.inputUsd || (parseFloat(swap.inputAmount) * inputPrice)
   const outputUsd = actualOutputHuman * outputPrice
   const usdLost = inputUsd - outputUsd

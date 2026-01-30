@@ -2,6 +2,7 @@ import { createServer } from 'http'
 import { readFileSync, existsSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { getBalances, BTC_ADDRESS, EVM_ADDRESS } from './account.js'
+import { chainflip } from './providers/chainflip.js'
 
 const CSV_HEADER = 'timestamp,type,provider,inputToken,outputToken,inputAmount,outputAmount,swapId,txHash,status,payoutTxHash,actualOutputAmount,btcPrice,cbbtcPrice,usdcPrice,ethPrice,relayRequestId,chainflipSwapId,inputUsd,outputUsd,usdLost,feeBips'
 
@@ -39,6 +40,25 @@ export function startServer() {
       res.setHeader('Access-Control-Allow-Origin', '*')
       writeFileSync(csvFile, CSV_HEADER + '\n')
       res.end(JSON.stringify({ success: true }))
+      return
+    }
+
+    if (req.url === '/api/chainflip-pending') {
+      res.setHeader('Content-Type', 'application/json; charset=utf-8')
+      res.setHeader('Access-Control-Allow-Origin', '*')
+      // Return pending chainflip swap IDs that we know about (from status checks)
+      const data = parseCSV(csvFile)
+      const pendingChainflipSwaps = data
+        .filter((d: any) => d.type === 'swap' && d.provider === 'Chainflip' && d.status === 'pending')
+        .map((d: any) => {
+          const info = chainflip.getPendingSwapInfo(d.swapId)
+          return {
+            swapId: d.swapId,
+            numericSwapId: info?.numericSwapId || null,
+          }
+        })
+        .filter((d: any) => d.numericSwapId)
+      res.end(JSON.stringify(pendingChainflipSwaps))
       return
     }
 
@@ -82,6 +102,7 @@ export function startServer() {
       --text-muted: #555568;
       --accent-cyan: #00e5ff;
       --accent-purple: #a855f7;
+      --accent-pink: #ec4899;
       --accent-green: #22c55e;
       --accent-orange: #f59e0b;
       --accent-red: #ef4444;
@@ -364,13 +385,13 @@ export function startServer() {
     }
     
     .provider-badge.relay {
-      background: rgba(168, 85, 247, 0.1);
-      color: var(--accent-purple);
+      background: rgba(236, 72, 153, 0.1);
+      color: var(--accent-pink);
     }
     
     .provider-badge.rift {
-      background: rgba(59, 130, 246, 0.1);
-      color: var(--accent-blue);
+      background: rgba(168, 85, 247, 0.1);
+      color: var(--accent-purple);
     }
     
     .provider-badge.thorchain {
@@ -379,8 +400,8 @@ export function startServer() {
     }
     
     .provider-badge.chainflip {
-      background: rgba(0, 229, 255, 0.1);
-      color: var(--accent-cyan);
+      background: rgba(245, 158, 11, 0.1);
+      color: var(--accent-orange);
       border-radius: 6px;
       color: var(--accent-orange);
       font-size: 0.8rem;
@@ -727,14 +748,28 @@ export function startServer() {
     .journey-provider {
       font-size: 0.75rem;
       font-weight: 600;
-      color: var(--text-muted);
-      min-width: 50px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      min-width: 90px;
+      text-align: center;
     }
 
-    .journey-provider.rift { color: var(--accent-blue); }
-    .journey-provider.relay { color: var(--accent-purple); }
-    .journey-provider.thorchain { color: var(--accent-green); }
-    .journey-provider.chainflip { color: var(--accent-cyan); }
+    .journey-provider.rift {
+      background: rgba(168, 85, 247, 0.1);
+      color: var(--accent-purple);
+    }
+    .journey-provider.relay {
+      background: rgba(236, 72, 153, 0.1);
+      color: var(--accent-pink);
+    }
+    .journey-provider.thorchain {
+      background: rgba(34, 197, 94, 0.1);
+      color: var(--accent-green);
+    }
+    .journey-provider.chainflip {
+      background: rgba(245, 158, 11, 0.1);
+      color: var(--accent-orange);
+    }
 
     .journey-direction {
       font-family: 'Fira Code', monospace;
@@ -746,8 +781,52 @@ export function startServer() {
     .journey-amount {
       font-family: 'Fira Code', monospace;
       font-size: 0.8rem;
-      color: var(--accent-green);
+      color: var(--accent-orange);
       min-width: 100px;
+    }
+
+    .journey-output {
+      font-family: 'Fira Code', monospace;
+      font-size: 0.8rem;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 140px;
+    }
+
+    .journey-output .expected {
+      color: var(--text-muted);
+      font-size: 0.75rem;
+    }
+
+    .journey-output .actual {
+      color: var(--accent-green);
+    }
+
+    .journey-fees {
+      font-family: 'Fira Code', monospace;
+      font-size: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 100px;
+      text-align: right;
+    }
+
+    .journey-fees .usd {
+      color: var(--text-muted);
+    }
+
+    .journey-fees .bips {
+      font-weight: 600;
+    }
+
+    .journey-fees .bips.positive {
+      color: var(--accent-red);
+    }
+
+    .journey-fees .bips.negative {
+      color: var(--accent-green);
     }
 
     .journey-steps {
@@ -996,7 +1075,7 @@ export function startServer() {
     }
     
     // Build swap journeys by grouping quote -> swap -> settlement
-    function buildJourneys(data) {
+    function buildJourneys(data, cfSwapIdMap = {}) {
       const journeys = new Map() // swapId -> journey object
       const quotes = data.filter(d => d.type === 'quote')
       const swaps = data.filter(d => d.type === 'swap')
@@ -1027,7 +1106,17 @@ export function startServer() {
         })
         
         // Find matching settlement
-        const matchingSettlement = settlements.find(s => s.swapId === swap.swapId)
+        let matchingSettlement = settlements.find(s => s.swapId === swap.swapId)
+        
+        // For Chainflip swaps, check if we have a pending swap ID from the live tracker
+        if (swap.provider === 'Chainflip' && !matchingSettlement?.chainflipSwapId && cfSwapIdMap[swap.swapId]) {
+          // Create a pseudo-settlement object with the chainflip swap ID if we don't have one
+          if (!matchingSettlement) {
+            matchingSettlement = { chainflipSwapId: cfSwapIdMap[swap.swapId] }
+          } else {
+            matchingSettlement = { ...matchingSettlement, chainflipSwapId: cfSwapIdMap[swap.swapId] }
+          }
+        }
         
         journeys.set(swap.swapId, {
           swapId: swap.swapId,
@@ -1146,11 +1235,41 @@ export function startServer() {
       const swapTime = formatTime(journey.swap.timestamp)
       const settlementTime = journey.settlement ? formatTime(journey.settlement.timestamp) : '—'
       
+      // Expected output from swap
+      const expectedOutput = journey.swap.outputAmount || journey.outputAmount
+      
+      // Actual output from settlement (needs conversion from smallest unit)
+      let actualOutput = null
+      if (journey.settlement?.actualOutputAmount) {
+        const decimals = { BTC: 8, CBBTC: 8, USDC: 6, ETH: 18 }[journey.outputToken] || 18
+        const raw = journey.settlement.actualOutputAmount
+        const padded = raw.padStart(decimals + 1, '0')
+        const whole = padded.slice(0, -decimals) || '0'
+        const frac = padded.slice(-decimals).replace(/0+$/, '')
+        actualOutput = frac ? whole + '.' + frac : whole
+      }
+      
+      // Fee metrics from settlement or swap
+      const inputUsd = journey.settlement?.inputUsd || journey.swap?.inputUsd || ''
+      const outputUsd = journey.settlement?.outputUsd || ''
+      const usdLost = journey.settlement?.usdLost || ''
+      const feeBips = journey.settlement?.feeBips || ''
+      const bipsNum = parseFloat(feeBips) || 0
+      const bipsClass = bipsNum > 0 ? 'positive' : bipsNum < 0 ? 'negative' : ''
+      
       return \`
         <div class="journey-row \${statusClass}" onclick="showJourneyDetails(\${idx})">
           <span class="journey-provider \${providerClass}">\${providerEmoji} \${journey.provider}</span>
           <span class="journey-direction">\${journey.inputToken} → \${journey.outputToken}</span>
           <span class="journey-amount">\${journey.inputAmount} \${journey.inputToken}</span>
+          <div class="journey-output">
+            <span class="expected">exp: \${parseFloat(expectedOutput).toFixed(4)} \${journey.outputToken}</span>
+            <span class="actual">\${actualOutput ? 'act: ' + parseFloat(actualOutput).toFixed(4) + ' ' + journey.outputToken : '⏳ pending'}</span>
+          </div>
+          <div class="journey-fees">
+            \${inputUsd ? \`<span class="usd">$\${parseFloat(inputUsd).toFixed(2)} → $\${outputUsd ? parseFloat(outputUsd).toFixed(2) : '...'}</span>\` : '<span class="usd">—</span>'}
+            \${feeBips ? \`<span class="bips \${bipsClass}">\${bipsNum > 0 ? '+' : ''}\${bipsNum.toFixed(0)} bips</span>\` : '<span class="bips">⏳</span>'}
+          </div>
           <div class="journey-steps">
             <span class="journey-step \${journey.quote ? 'active' : 'inactive'}">📊 \${quoteTime}</span>
             <span class="journey-step active">🔄 \${swapTime}</span>
@@ -1264,6 +1383,40 @@ export function startServer() {
             <span class="modal-value">\${totalElapsed}</span>
           </div>
         </div>
+        
+        \${journey.settlement?.feeBips ? \`
+        <div class="modal-section">
+          <div class="modal-section-title">Fee Analysis</div>
+          <div class="modal-row">
+            <span class="modal-label">Input USD</span>
+            <span class="modal-value">$\${parseFloat(journey.settlement.inputUsd || journey.swap?.inputUsd || 0).toFixed(2)}</span>
+          </div>
+          <div class="modal-row">
+            <span class="modal-label">Output USD</span>
+            <span class="modal-value">$\${parseFloat(journey.settlement.outputUsd || 0).toFixed(2)}</span>
+          </div>
+          <div class="modal-row">
+            <span class="modal-label">USD Lost</span>
+            <span class="modal-value" style="color: \${parseFloat(journey.settlement.usdLost) > 0 ? 'var(--accent-red)' : 'var(--accent-green)'}">$\${parseFloat(journey.settlement.usdLost || 0).toFixed(2)}</span>
+          </div>
+          <div class="modal-row">
+            <span class="modal-label">Fee (BIPs)</span>
+            <span class="modal-value" style="color: \${parseFloat(journey.settlement.feeBips) > 0 ? 'var(--accent-red)' : 'var(--accent-green)'}; font-weight: 600;">\${parseFloat(journey.settlement.feeBips) > 0 ? '+' : ''}\${parseFloat(journey.settlement.feeBips || 0).toFixed(0)} bips (\${(parseFloat(journey.settlement.feeBips || 0) / 100).toFixed(2)}%)</span>
+          </div>
+        </div>
+        \` : journey.swap?.inputUsd ? \`
+        <div class="modal-section">
+          <div class="modal-section-title">Fee Analysis</div>
+          <div class="modal-row">
+            <span class="modal-label">Input USD</span>
+            <span class="modal-value">$\${parseFloat(journey.swap.inputUsd || 0).toFixed(2)}</span>
+          </div>
+          <div class="modal-row">
+            <span class="modal-label">Output USD</span>
+            <span class="modal-value" style="color: var(--text-muted)">⏳ Pending settlement</span>
+          </div>
+        </div>
+        \` : ''}
         
         <div class="modal-section">
           <div class="modal-section-title">IDs & Transactions</div>
@@ -1403,7 +1556,7 @@ export function startServer() {
           <div class="modal-section-title">Provider</div>
           <div class="modal-row">
             <span class="modal-label">Provider</span>
-            <span class="modal-value" style="color: var(--accent-\${{ Relay: 'purple', Rift: 'blue', Thorchain: 'green', Chainflip: 'cyan' }[journey.provider] || 'orange'})">\${{ Rift: '🌀', Relay: '🔗', Thorchain: '⚡', Chainflip: '🔄' }[journey.provider] || '⚡'} \${journey.provider}</span>
+            <span class="modal-value" style="color: var(--accent-\${{ Relay: 'pink', Rift: 'purple', Thorchain: 'green', Chainflip: 'orange' }[journey.provider] || 'orange'})">\${{ Rift: '🌀', Relay: '🔗', Thorchain: '⚡', Chainflip: '🔄' }[journey.provider] || '⚡'} \${journey.provider}</span>
           </div>
         </div>
       \`
@@ -1414,8 +1567,18 @@ export function startServer() {
     
     async function loadData() {
       try {
-        const res = await fetch('/api/data')
-        allData = await res.json()
+        const [dataRes, cfPendingRes] = await Promise.all([
+          fetch('/api/data'),
+          fetch('/api/chainflip-pending')
+        ])
+        allData = await dataRes.json()
+        const cfPending = await cfPendingRes.json()
+        
+        // Build a map of swapId -> numericSwapId for quick lookup
+        const cfSwapIdMap = {}
+        for (const cf of cfPending) {
+          cfSwapIdMap[cf.swapId] = cf.numericSwapId
+        }
         
         const tbody = document.getElementById('tbody')
         const journeysGrid = document.getElementById('journeysGrid')
@@ -1428,7 +1591,7 @@ export function startServer() {
         document.getElementById('settlementCount').textContent = settlements.length
         
         // Build and render journeys
-        allJourneys = buildJourneys(allData)
+        allJourneys = buildJourneys(allData, cfSwapIdMap)
         populateProviderFilter()
         
         if (allJourneys.length === 0) {
@@ -1537,7 +1700,7 @@ export function startServer() {
           </div>
           <div class="modal-row">
             <span class="modal-label">Provider</span>
-            <span class="modal-value" style="color: var(--accent-\${{ Relay: 'purple', Rift: 'blue', Thorchain: 'green', Chainflip: 'cyan' }[row.provider] || 'orange'})">\${{ Rift: '🌀', Relay: '🔗', Thorchain: '⚡', Chainflip: '🔄' }[row.provider] || '⚡'} \${row.provider}</span>
+            <span class="modal-value" style="color: var(--accent-\${{ Relay: 'pink', Rift: 'purple', Thorchain: 'green', Chainflip: 'orange' }[row.provider] || 'orange'})">\${{ Rift: '🌀', Relay: '🔗', Thorchain: '⚡', Chainflip: '🔄' }[row.provider] || '⚡'} \${row.provider}</span>
           </div>
           <div class="modal-row">
             <span class="modal-label">Time</span>
